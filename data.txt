@@ -1,0 +1,43 @@
+! ==========================================
+! XTerm - Tema Amber / CRT
+! ==========================================
+
+XTerm*background: #0D0904
+XTerm*foreground: #FFB000
+XTerm*cursorColor: #FFD060
+
+! Colores ANSI
+XTerm*color0:  #0D0904
+XTerm*color1:  #FF5500
+XTerm*color2:  #C87500
+XTerm*color3:  #FFB000
+XTerm*color4:  #805800
+XTerm*color5:  #C87500
+XTerm*color6:  #C87500
+XTerm*color7:  #FFB000
+
+XTerm*color8:  #3A2410
+XTerm*color9:  #FF7040
+XTerm*color10: #FF9500
+XTerm*color11: #FFD060
+XTerm*color12: #A06000
+XTerm*color13: #E09000
+XTerm*color14: #FFB000
+XTerm*color15: #FFE0A0
+
+! Fuente
+XTerm*faceName: Monospace
+XTerm*faceSize: 11
+
+! Sin barra de desplazamiento
+XTerm*scrollBar: false
+
+! Cursor
+XTerm*cursorBlink: true
+XTerm*cursorUnderLine: false
+
+! Margen
+XTerm*internalBorder: 4
+
+! No usar decoración de ventana
+XTerm*borderWidth: 0
