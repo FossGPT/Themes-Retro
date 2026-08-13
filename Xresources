@@ -50,3 +50,4 @@ XTerm*cursorUnderLine: false
 XTerm*scrollBar: false
 XTerm*internalBorder: 3
 XTerm*borderWidth: 0
+
