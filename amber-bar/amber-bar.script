@@ -1,75 +1,171 @@
-Window.SetBackgroundTopColor(0, 0, 0);
-Window.SetBackgroundBottomColor(0, 0, 0);
+Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 
 screen_width = Window.GetWidth();
 screen_height = Window.GetHeight();
 
-amber = 1.0;
-bar_width = Math.Int(screen_width * 0.60);
+amber_r = 1.0;
+amber_g = 0.65;
+amber_b = 0.0;
+
+bar_width = 600;
 bar_height = 32;
 
 bar_x = Math.Int((screen_width - bar_width) / 2);
-bar_y = Math.Int(screen_height * 0.47);
+bar_y = Math.Int(screen_height / 2);
 
-/* Texto */
+
+/* Margen interior */
+margin = 7;
+
+
+/* =========================
+   TEXTO
+   ========================= */
+
 title = Sprite();
-title.SetPosition(bar_x, bar_y - 45, 0);
-title.SetOpacity(1);
 
-title_image = Image.Text("Iniciando sistema...", 1.0, 0.65, 0.0, "DejaVu Sans Mono");
-title.SetImage(title_image);
+title.SetPosition(
+    bar_x,
+    bar_y - 50,
+    0
+);
 
-/* Marco de la barra */
+title.SetImage(
+    Image.Text(
+        "Iniciando sistema...",
+        amber_r,
+        amber_g,
+        amber_b,
+        "DejaVu Sans Mono 18"
+    )
+);
+
+
+/* =========================
+   BORDE
+   ========================= */
+
 border = Sprite();
-border.SetPosition(bar_x, bar_y, 0);
 
-border_image = Image("amber-border.png");
-border.SetImage(border_image);
+border.SetPosition(
+    bar_x,
+    bar_y,
+    0
+);
 
-/* Parte que se llena */
+border.SetImage(
+    Image("amber-border.png")
+);
+
+
+/* =========================
+   RELLENO
+   ========================= */
+
 progress = Sprite();
-progress.SetPosition(bar_x + 4, bar_y + 4, 1);
 
-progress_image = Image("amber-fill.png");
-progress.SetImage(progress_image);
+progress.SetPosition(
+    bar_x + margin,
+    bar_y + margin,
+    1
+);
 
-/* Porcentaje */
+
+/* =========================
+   PORCENTAJE
+   ========================= */
+
 percentage = Sprite();
-percentage.SetPosition(bar_x + bar_width + 25, bar_y + 3, 0);
 
-percentage_image = Image.Text("0%", 1.0, 0.65, 0.0, "DejaVu Sans Mono");
-percentage.SetImage(percentage_image);
+percentage.SetPosition(
+    bar_x + bar_width + 20,
+    bar_y + 3,
+    0
+);
 
 
-/*
- * Plymouth nos proporciona el progreso del arranque.
- */
-fun boot_progress(duration, progress_value) {
-    if (progress_value < 0)
-        progress_value = 0;
+/* =========================
+   PROGRESO
+   ========================= */
 
-    if (progress_value > 1)
-        progress_value = 1;
+fun update_progress(duration, value) {
 
-    fill_width = Math.Int((bar_width - 8) * progress_value);
+    if (value < 0)
+        value = 0;
 
-    if (fill_width > 0) {
-        progress_image = Image("amber-fill.png");
-        progress_image = progress_image.Scale(fill_width, bar_height - 8);
-        progress.SetImage(progress_image);
-    }
+    if (value > 1)
+        value = 1;
 
-    percent = Math.Int(progress_value * 100);
+
+    /*
+     * Área REAL disponible dentro
+     * del borde.
+     */
+
+    inner_width = bar_width - (margin * 2);
+    inner_height = bar_height - (margin * 2);
+
+
+    /*
+     * Ancho del relleno según
+     * el porcentaje.
+     */
+
+    fill_width = Math.Int(
+        inner_width * value
+    );
+
+
+    /*
+     * Evitamos crear una imagen
+     * con ancho 0.
+     */
+
+    if (fill_width < 1)
+        fill_width = 1;
+
+
+    /*
+     * Crear el relleno.
+     */
+
+    fill = Image("amber-fill.png");
+
+    fill = fill.Scale(
+        fill_width,
+        inner_height
+    );
+
+
+    progress.SetImage(fill);
+
+
+    /*
+     * Porcentaje.
+     */
+
+    percent = Math.Int(
+        value * 100
+    );
+
 
     percentage.SetImage(
         Image.Text(
             percent + "%",
-            1.0,
-            0.65,
-            0.0,
-            "DejaVu Sans Mono"
+            amber_r,
+            amber_g,
+            amber_b,
+            "DejaVu Sans Mono 18"
         )
     );
 }
 
-Plymouth.SetBootProgressFunction(boot_progress);
+
+/* =========================
+   PLYMOUTH
+   ========================= */
+
+Plymouth.SetBootProgressFunction(
+    update_progress
+);
