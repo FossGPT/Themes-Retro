@@ -1,0 +1,52 @@
+! ==========================================================
+! XTERM - CRT ORANGE PHOSPHOR
+! ==========================================================
+
+! Fondo y texto
+XTerm*background: #080604
+XTerm*foreground: #FF5A00
+XTerm*cursorColor: #FF6A00
+
+! ==========================================================
+! ANSI
+! ==========================================================
+
+XTerm*color0:  #080604
+XTerm*color1:  #B83200
+XTerm*color2:  #B83D00
+XTerm*color3:  #D94A00
+XTerm*color4:  #8C3000
+XTerm*color5:  #A83800
+XTerm*color6:  #B83D00
+XTerm*color7:  #FF5A00
+
+XTerm*color8:  #3A1808
+XTerm*color9:  #E84500
+XTerm*color10: #E84F00
+XTerm*color11: #FF6500
+XTerm*color12: #B83D00
+XTerm*color13: #D94A00
+XTerm*color14: #FF5A00
+XTerm*color15: #FF7A20
+
+! ==========================================================
+! FUENTE
+! ==========================================================
+
+XTerm*faceName: Monospace
+XTerm*faceSize: 15
+
+! ==========================================================
+! CURSOR
+! ==========================================================
+
+XTerm*cursorBlink: true
+XTerm*cursorUnderLine: false
+
+! ==========================================================
+! VENTANA
+! ==========================================================
+
+XTerm*scrollBar: false
+XTerm*internalBorder: 3
+XTerm*borderWidth: 0
