@@ -1,8 +1,0 @@
-[Plymouth Theme]
-Name=Amber Bar
-Description=VT320 Amber boot theme
-ModuleName=script
-
-[script]
-ImageDir=/usr/share/plymouth/themes/amber-bar
-ScriptFile=/usr/share/plymouth/themes/amber-bar/amber-bar.script
