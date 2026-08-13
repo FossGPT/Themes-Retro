@@ -1,12 +1,21 @@
 #!/bin/bash
 
+# ============================================================
+# AMBER BAR INSTALLER
+# Ubuntu Server 22.04
+#
+# Opciones:
+#   1 - Instalar / actualizar
+#   2 - Reiniciar
+#   3 - Desinstalar
+#   4 - Salir
+# ============================================================
+
 set -u
 
-# ============================================================
-# AMBER BAR
-# Plymouth Theme + Systemd Boot Gate
-# Ubuntu Server 22.04
-# ============================================================
+# ------------------------------------------------------------
+# CONFIGURACIÓN
+# ------------------------------------------------------------
 
 THEME_NAME="amber-bar"
 
@@ -24,19 +33,29 @@ ALT_NAME="default.plymouth"
 
 INITRAMFS_TIMEOUT=10
 
-# ============================================================
+# Archivo donde guardamos la alternativa anterior
+BACKUP_FILE="/var/lib/amber-bar/previous-plymouth"
+
+# ------------------------------------------------------------
 # COLORES
-# ============================================================
+# ------------------------------------------------------------
 
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
 RED="\033[0;31m"
 CYAN="\033[0;36m"
+WHITE="\033[1;37m"
 RESET="\033[0m"
 
-# ============================================================
+# ------------------------------------------------------------
 # FUNCIONES
-# ============================================================
+# ------------------------------------------------------------
+
+pause()
+{
+    echo
+    read -rp "Presiona ENTER para continuar..."
+}
 
 info()
 {
@@ -58,183 +77,276 @@ error()
     echo -e "${RED}[ERROR]${RESET} $1"
 }
 
-# ============================================================
+# ------------------------------------------------------------
 # ROOT
-# ============================================================
+# ------------------------------------------------------------
 
-if [ "$EUID" -ne 0 ]; then
-    error "Este instalador debe ejecutarse como root."
-    echo
-    echo "Usa:"
-    echo
-    echo "    sudo $0"
-    echo
-    exit 1
-fi
+check_root()
+{
+    if [ "$EUID" -ne 0 ]; then
+        error "Este programa debe ejecutarse como root."
+        echo
+        echo "Ejecuta:"
+        echo
+        echo "    sudo $0"
+        echo
+        exit 1
+    fi
+}
 
-clear
+# ------------------------------------------------------------
+# COMPROBAR PLYMOUTH
+# ------------------------------------------------------------
 
-echo
-echo "============================================================"
-echo "                 AMBER BAR INSTALLER"
-echo "============================================================"
-echo
-echo "Plymouth theme : ${THEME_NAME}"
-echo "Service        : ${SERVICE_NAME}"
-echo "Initramfs      : ${INITRAMFS_TIMEOUT}s timeout"
-echo
-echo "============================================================"
-echo
+check_plymouth()
+{
+    if ! command -v plymouth >/dev/null 2>&1; then
 
-# ============================================================
-# COMPROBAR UBUNTU
-# ============================================================
+        error "Plymouth no está instalado."
 
-if [ -f /etc/os-release ]; then
+        echo
+        echo "Puedes instalarlo con:"
+        echo
+        echo "    sudo apt install plymouth plymouth-themes"
+        echo
 
-    . /etc/os-release
-
-    info "Sistema detectado: ${PRETTY_NAME}"
-
-    if [ "${ID:-}" != "ubuntu" ]; then
-        warn "Este instalador está diseñado para Ubuntu."
+        return 1
     fi
 
-fi
+    return 0
+}
 
-# ============================================================
-# COMPROBAR PLYMOUTH
-# ============================================================
+# ------------------------------------------------------------
+# MOSTRAR TEMA ACTUAL
+# ------------------------------------------------------------
 
-if ! command -v plymouth >/dev/null 2>&1; then
-
-    error "Plymouth no está instalado."
-
+show_current_theme()
+{
     echo
-    echo "Instala Plymouth con:"
-    echo
-    echo "    sudo apt install plymouth plymouth-themes"
-    echo
-
-    exit 1
-
-fi
-
-ok "Plymouth encontrado."
-
-# ============================================================
-# COMPROBAR TEMA
-# ============================================================
-
-info "Comprobando tema Amber Bar..."
-
-if [ ! -d "$THEME_DIR" ]; then
-
-    error "No existe el directorio:"
-    echo
-    echo "    $THEME_DIR"
+    echo "----------------------------------------------"
+    echo "Tema Plymouth actualmente seleccionado:"
+    echo "----------------------------------------------"
     echo
 
-    exit 1
+    CURRENT_THEME=$(readlink -f \
+        /usr/share/plymouth/themes/default.plymouth \
+        2>/dev/null || true)
 
-fi
+    if [ -n "$CURRENT_THEME" ]; then
+        echo "    $CURRENT_THEME"
+    else
+        echo "    No determinado"
+    fi
 
-if [ ! -f "$PLYMOUTH_FILE" ]; then
-
-    error "No existe:"
     echo
-    echo "    $PLYMOUTH_FILE"
+}
+
+# ------------------------------------------------------------
+# GUARDAR TEMA ANTERIOR
+# ------------------------------------------------------------
+
+save_previous_theme()
+{
+    mkdir -p /var/lib/amber-bar
+
+    CURRENT_THEME=$(readlink -f \
+        /usr/share/plymouth/themes/default.plymouth \
+        2>/dev/null || true)
+
+    if [ -n "$CURRENT_THEME" ] &&
+       [ "$CURRENT_THEME" != "$PLYMOUTH_FILE" ]; then
+
+        echo "$CURRENT_THEME" > "$BACKUP_FILE"
+
+        info "Tema anterior guardado:"
+        echo "    $CURRENT_THEME"
+
+    fi
+}
+
+# ------------------------------------------------------------
+# UPDATE INITRAMFS CON TIMEOUT
+# ------------------------------------------------------------
+
+update_initramfs_safe()
+{
+    echo
+    echo "=============================================="
+    echo "        ACTUALIZANDO INITRAMFS"
+    echo "=============================================="
+    echo
+    echo "Tiempo máximo: ${INITRAMFS_TIMEOUT} segundos."
     echo
 
-    exit 1
+    info "Ejecutando update-initramfs -u -k all..."
 
-fi
+    if timeout \
+        --signal=TERM \
+        --kill-after=2s \
+        "${INITRAMFS_TIMEOUT}s" \
+        update-initramfs -u -k all
+    then
 
-if [ ! -f "$PLYMOUTH_SCRIPT" ]; then
+        ok "initramfs actualizado correctamente."
 
-    error "No existe:"
+    else
+
+        RESULT=$?
+
+        if [ "$RESULT" -eq 124 ]; then
+
+            warn "update-initramfs superó ${INITRAMFS_TIMEOUT} segundos."
+            warn "El proceso fue detenido."
+            warn "El instalador continuará."
+
+        else
+
+            warn "update-initramfs terminó con código ${RESULT}."
+            warn "El instalador continuará."
+
+        fi
+    fi
+}
+
+# ------------------------------------------------------------
+# UPDATE GRUB
+# ------------------------------------------------------------
+
+update_grub_safe()
+{
     echo
-    echo "    $PLYMOUTH_SCRIPT"
+    info "Actualizando GRUB..."
+
+    if update-grub; then
+        ok "GRUB actualizado."
+    else
+        warn "update-grub terminó con errores."
+    fi
+}
+
+# ============================================================
+# INSTALAR
+# ============================================================
+
+install_amber_bar()
+{
+    clear
+
+    echo
+    echo "============================================================"
+    echo "              INSTALANDO AMBER BAR"
+    echo "============================================================"
     echo
 
-    exit 1
+    # --------------------------------------------------------
+    # Comprobar Plymouth
+    # --------------------------------------------------------
 
-fi
+    if ! check_plymouth; then
+        pause
+        return
+    fi
 
-ok "Tema Amber Bar encontrado."
+    # --------------------------------------------------------
+    # Comprobar tema
+    # --------------------------------------------------------
 
-# ============================================================
-# MOSTRAR ALTERNATIVA ACTUAL
-# ============================================================
+    if [ ! -d "$THEME_DIR" ]; then
 
-echo
-info "Alternativa Plymouth actual:"
-echo
+        error "No existe:"
+        echo
+        echo "    $THEME_DIR"
+        echo
+        echo "Debes colocar primero el tema Amber Bar allí."
 
-update-alternatives --display "$ALT_NAME" 2>/dev/null || true
+        pause
+        return
+    fi
 
-echo
+    if [ ! -f "$PLYMOUTH_FILE" ]; then
 
-# ============================================================
-# REGISTRAR AMBER BAR
-# ============================================================
+        error "No existe:"
+        echo
+        echo "    $PLYMOUTH_FILE"
 
-info "Registrando Amber Bar en update-alternatives..."
+        pause
+        return
+    fi
 
-update-alternatives \
-    --install \
-    /usr/share/plymouth/themes/default.plymouth \
-    "$ALT_NAME" \
-    "$PLYMOUTH_FILE" \
-    200
+    if [ ! -f "$PLYMOUTH_SCRIPT" ]; then
 
-ok "Amber Bar registrado."
+        error "No existe:"
+        echo
+        echo "    $PLYMOUTH_SCRIPT"
 
-# ============================================================
-# SELECCIONAR AMBER BAR
-# ============================================================
+        pause
+        return
+    fi
 
-info "Seleccionando Amber Bar como tema Plymouth..."
+    ok "Tema Amber Bar encontrado."
 
-update-alternatives \
-    --set \
-    "$ALT_NAME" \
-    "$PLYMOUTH_FILE"
+    # --------------------------------------------------------
+    # Guardar alternativa anterior
+    # --------------------------------------------------------
 
-ok "Amber Bar seleccionado."
+    save_previous_theme
 
-# ============================================================
-# VERIFICAR SELECCIÓN
-# ============================================================
+    # --------------------------------------------------------
+    # Registrar alternativa
+    # --------------------------------------------------------
 
-echo
-info "Tema Plymouth seleccionado:"
+    echo
+    info "Registrando Amber Bar..."
 
-CURRENT_THEME=$(readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true)
+    update-alternatives \
+        --install \
+        /usr/share/plymouth/themes/default.plymouth \
+        "$ALT_NAME" \
+        "$PLYMOUTH_FILE" \
+        200
 
-echo
-echo "    ${CURRENT_THEME}"
-echo
+    ok "Amber Bar registrado."
 
-if [ "$CURRENT_THEME" = "$PLYMOUTH_FILE" ]; then
+    # --------------------------------------------------------
+    # FORZAR SELECCIÓN
+    # --------------------------------------------------------
 
-    ok "Amber Bar es el tema Plymouth activo."
+    info "Seleccionando Amber Bar..."
 
-else
+    update-alternatives \
+        --set \
+        "$ALT_NAME" \
+        "$PLYMOUTH_FILE"
 
-    warn "La alternativa no apunta exactamente a Amber Bar."
-    warn "Revisa la salida anterior."
+    CURRENT_THEME=$(readlink -f \
+        /usr/share/plymouth/themes/default.plymouth)
 
-fi
+    echo
 
-# ============================================================
-# CREAR GATE SCRIPT
-# ============================================================
+    if [ "$CURRENT_THEME" = "$PLYMOUTH_FILE" ]; then
 
-echo
-info "Instalando Amber Bar Gate..."
+        ok "Amber Bar es ahora el tema activo."
 
-cat > "$GATE_SCRIPT" <<'EOF'
+    else
+
+        error "No se pudo seleccionar Amber Bar."
+        echo
+        echo "Tema actual:"
+        echo "$CURRENT_THEME"
+        echo
+
+        pause
+        return
+    fi
+
+    # --------------------------------------------------------
+    # CREAR GATE SCRIPT
+    # --------------------------------------------------------
+
+    echo
+    info "Instalando Amber Bar Gate..."
+
+    cat > "$GATE_SCRIPT" <<'EOF'
 #!/bin/bash
 
 set -u
@@ -242,76 +354,51 @@ set -u
 PLYMOUTH="/usr/bin/plymouth"
 FLAG="/run/amber-bar-enter"
 
-# ------------------------------------------------------------
-# Limpiar estado anterior
-# ------------------------------------------------------------
-
 rm -f "$FLAG"
-
-# ------------------------------------------------------------
-# Comprobar Plymouth
-# ------------------------------------------------------------
 
 if [ ! -x "$PLYMOUTH" ]; then
     exit 1
 fi
 
-# ------------------------------------------------------------
-# Avisar al tema de Plymouth
-#
-# Amber Bar debe detectar:
-#
-#     __VT320_READY__
-#
-# y cambiar:
-#
-#     WAIT
-#
-# por:
-#
-#     VT320 OK
-# ------------------------------------------------------------
+# Avisar al tema Plymouth que el sistema está listo.
 
-"$PLYMOUTH" display-message \
+/usr/bin/plymouth display-message \
     --text="__VT320_READY__" || true
 
-# ------------------------------------------------------------
-# Esperar ENTER
-# ------------------------------------------------------------
+# Esperar ENTER.
 
-"$PLYMOUTH" watch-keystroke \
+/usr/bin/plymouth watch-keystroke \
     --keys=$'\n' \
     --command="/usr/bin/touch $FLAG" || true
 
-# ------------------------------------------------------------
-# Esperar hasta que llegue ENTER
-# ------------------------------------------------------------
+# Esperar ENTER.
+
+/usr/bin/plymouth watch-keystroke \
+    --keys="ENTER" \
+    --command="/usr/bin/touch $FLAG" || true
 
 while [ ! -f "$FLAG" ]; do
     sleep 0.05
 done
 
-# ------------------------------------------------------------
-# ENTER recibido
-# ------------------------------------------------------------
+# Continuar.
 
-"$PLYMOUTH" quit || true
+/usr/bin/plymouth quit || true
 
 exit 0
 EOF
 
-chmod 755 "$GATE_SCRIPT"
+    chmod 755 "$GATE_SCRIPT"
 
-ok "Gate instalado:"
-echo "    $GATE_SCRIPT"
+    ok "Gate instalado."
 
-# ============================================================
-# CREAR SERVICIO SYSTEMD
-# ============================================================
+    # --------------------------------------------------------
+    # CREAR SERVICIO
+    # --------------------------------------------------------
 
-info "Creando servicio systemd..."
+    info "Creando servicio systemd..."
 
-cat > "$SERVICE_FILE" <<'EOF'
+    cat > "$SERVICE_FILE" <<'EOF'
 [Unit]
 Description=Amber Bar Plymouth Boot Gate
 
@@ -331,178 +418,362 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-chmod 644 "$SERVICE_FILE"
+    chmod 644 "$SERVICE_FILE"
 
-ok "Servicio creado:"
-echo "    $SERVICE_FILE"
+    ok "Servicio creado."
+
+    # --------------------------------------------------------
+    # SYSTEMD
+    # --------------------------------------------------------
+
+    info "Recargando systemd..."
+
+    systemctl daemon-reload
+
+    ok "systemd recargado."
+
+    # --------------------------------------------------------
+    # ENABLE
+    # --------------------------------------------------------
+
+    info "Habilitando Amber Bar Gate..."
+
+    systemctl enable "$SERVICE_NAME"
+
+    ok "Servicio habilitado."
+
+    # --------------------------------------------------------
+    # INITRAMFS
+    # --------------------------------------------------------
+
+    update_initramfs_safe
+
+    # --------------------------------------------------------
+    # GRUB
+    # --------------------------------------------------------
+
+    update_grub_safe
+
+    # --------------------------------------------------------
+    # VERIFICACIÓN
+    # --------------------------------------------------------
+
+    echo
+    echo "============================================================"
+    echo "                  INSTALACIÓN COMPLETA"
+    echo "============================================================"
+    echo
+
+    echo "Tema activo:"
+    echo
+    readlink -f \
+        /usr/share/plymouth/themes/default.plymouth
+    echo
+
+    echo "Servicio:"
+    echo
+    systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true
+
+    echo
+    echo "Archivos:"
+    echo
+    echo "  $PLYMOUTH_FILE"
+    echo "  $PLYMOUTH_SCRIPT"
+    echo "  $GATE_SCRIPT"
+    echo "  $SERVICE_FILE"
+
+    echo
+    echo "============================================================"
+    echo
+
+    ok "Amber Bar quedó instalado."
+
+    echo
+    echo "Para probarlo selecciona:"
+    echo
+    echo "    2) Reiniciar"
+    echo
+
+    pause
+}
 
 # ============================================================
-# SYSTEMD DAEMON RELOAD
+# REINICIAR
 # ============================================================
 
-info "Recargando configuración de systemd..."
+restart_system()
+{
+    clear
 
-systemctl daemon-reload
+    echo
+    echo "============================================================"
+    echo "                    REINICIAR"
+    echo "============================================================"
+    echo
 
-ok "systemd recargado."
+    echo "El sistema se reiniciará en 3 segundos..."
+    echo
 
-# ============================================================
-# ENABLE
-# ============================================================
+    sleep 3
 
-info "Habilitando Amber Bar Gate..."
-
-systemctl enable "$SERVICE_NAME"
-
-ok "Amber Bar Gate habilitado."
-
-# ============================================================
-# COMPROBAR SERVICIO
-# ============================================================
-
-echo
-info "Estado del servicio:"
-
-systemctl is-enabled "$SERVICE_NAME" || true
+    reboot
+}
 
 # ============================================================
-# UPDATE-INITRAMFS
+# DESINSTALAR
 # ============================================================
 
-echo
-echo "============================================================"
-echo "             ACTUALIZANDO INITRAMFS"
-echo "============================================================"
-echo
-echo "Tiempo máximo: ${INITRAMFS_TIMEOUT} segundos"
-echo
+uninstall_amber_bar()
+{
+    clear
 
-info "Ejecutando update-initramfs -u..."
+    echo
+    echo "============================================================"
+    echo "              DESINSTALANDO AMBER BAR"
+    echo "============================================================"
+    echo
 
-# ------------------------------------------------------------
-# timeout:
-#
-# 10 segundos máximo.
-#
-# Si tarda más:
-#
-#   TERM
-#
-# después de 2 segundos:
-#
-#   KILL
-#
-# y el instalador continúa.
-# ------------------------------------------------------------
+    read -rp "¿Seguro que quieres desinstalar Amber Bar? [s/N]: " ANSWER
 
-if timeout \
-    --signal=TERM \
-    --kill-after=2s \
-    "${INITRAMFS_TIMEOUT}s" \
-    update-initramfs -u
-then
+    case "$ANSWER" in
+        s|S|si|SI|Si)
+            ;;
+        *)
+            echo
+            info "Desinstalación cancelada."
+            pause
+            return
+            ;;
+    esac
 
-    ok "initramfs actualizado correctamente."
+    # --------------------------------------------------------
+    # DETENER/DESHABILITAR SERVICIO
+    # --------------------------------------------------------
 
-else
+    echo
+    info "Deshabilitando Amber Bar Gate..."
 
-    RESULT=$?
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
 
-    if [ "$RESULT" -eq 124 ]; then
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
 
-        warn "update-initramfs superó ${INITRAMFS_TIMEOUT} segundos."
+    ok "Servicio deshabilitado."
 
-        warn "El proceso fue detenido."
+    # --------------------------------------------------------
+    # ELIMINAR SERVICIO
+    # --------------------------------------------------------
 
-        warn "Continuando con el instalador..."
+    if [ -f "$SERVICE_FILE" ]; then
 
-    else
+        rm -f "$SERVICE_FILE"
 
-        warn "update-initramfs terminó con código: ${RESULT}"
-
-        warn "Continuando con el instalador..."
+        ok "Servicio eliminado."
 
     fi
 
-fi
+    # --------------------------------------------------------
+    # ELIMINAR GATE
+    # --------------------------------------------------------
+
+    if [ -f "$GATE_SCRIPT" ]; then
+
+        rm -f "$GATE_SCRIPT"
+
+        ok "Amber Bar Gate eliminado."
+
+    fi
+
+    # --------------------------------------------------------
+    # DAEMON RELOAD
+    # --------------------------------------------------------
+
+    info "Recargando systemd..."
+
+    systemctl daemon-reload
+
+    ok "systemd recargado."
+
+    # --------------------------------------------------------
+    # ELIMINAR ALTERNATIVA AMBER BAR
+    # --------------------------------------------------------
+
+    info "Eliminando Amber Bar de update-alternatives..."
+
+    update-alternatives \
+        --remove \
+        "$ALT_NAME" \
+        "$PLYMOUTH_FILE" \
+        2>/dev/null || true
+
+    ok "Amber Bar eliminado de update-alternatives."
+
+    # --------------------------------------------------------
+    # RESTAURAR TEMA ANTERIOR
+    # --------------------------------------------------------
+
+    if [ -f "$BACKUP_FILE" ]; then
+
+        PREVIOUS_THEME=$(cat "$BACKUP_FILE")
+
+        if [ -f "$PREVIOUS_THEME" ]; then
+
+            info "Restaurando tema anterior..."
+
+            update-alternatives \
+                --set \
+                "$ALT_NAME" \
+                "$PREVIOUS_THEME" \
+                2>/dev/null || true
+
+            ok "Tema anterior restaurado."
+
+        else
+
+            warn "El tema anterior ya no existe:"
+            echo "    $PREVIOUS_THEME"
+
+            warn "Se dejará que update-alternatives seleccione otro tema."
+
+            update-alternatives \
+                --auto \
+                "$ALT_NAME" \
+                2>/dev/null || true
+        fi
+
+    else
+
+        info "No hay tema anterior guardado."
+        info "Seleccionando automáticamente otro tema..."
+
+        update-alternatives \
+            --auto \
+            "$ALT_NAME" \
+            2>/dev/null || true
+    fi
+
+    # --------------------------------------------------------
+    # ELIMINAR TEMA
+    # --------------------------------------------------------
+
+    if [ -d "$THEME_DIR" ]; then
+
+        info "Eliminando archivos de Amber Bar..."
+
+        rm -rf "$THEME_DIR"
+
+        ok "Tema Amber Bar eliminado."
+
+    fi
+
+    # --------------------------------------------------------
+    # ACTUALIZAR INITRAMFS
+    # --------------------------------------------------------
+
+    update_initramfs_safe
+
+    # --------------------------------------------------------
+    # ACTUALIZAR GRUB
+    # --------------------------------------------------------
+
+    update_grub_safe
+
+    # --------------------------------------------------------
+    # ELIMINAR BACKUP
+    # --------------------------------------------------------
+
+    rm -rf /var/lib/amber-bar
+
+    # --------------------------------------------------------
+    # RESULTADO
+    # --------------------------------------------------------
+
+    echo
+    echo "============================================================"
+    echo "              DESINSTALACIÓN COMPLETA"
+    echo "============================================================"
+    echo
+
+    echo "Tema Plymouth actual:"
+    echo
+
+    readlink -f \
+        /usr/share/plymouth/themes/default.plymouth \
+        2>/dev/null || true
+
+    echo
+
+    ok "Amber Bar ha sido eliminado."
+
+    echo
+    echo "Para comprobar el resultado, reinicia el sistema."
+    echo
+
+    pause
+}
 
 # ============================================================
-# UPDATE-GRUB
+# MENÚ
 # ============================================================
 
-echo
-info "Actualizando GRUB..."
+main_menu()
+{
+    while true; do
 
-if update-grub; then
+        clear
 
-    ok "GRUB actualizado."
+        echo
+        echo -e "${WHITE}╔══════════════════════════════════════════════╗${RESET}"
+        echo -e "${WHITE}║              AMBER BAR INSTALLER            ║${RESET}"
+        echo -e "${WHITE}╠══════════════════════════════════════════════╣${RESET}"
+        echo -e "${WHITE}║                                              ║${RESET}"
+        echo -e "${WHITE}║  ${GREEN}1${WHITE}) Instalar / actualizar Amber Bar          ║${RESET}"
+        echo -e "${WHITE}║  ${CYAN}2${WHITE}) Reiniciar sistema                       ║${RESET}"
+        echo -e "${WHITE}║  ${RED}3${WHITE}) Desinstalar Amber Bar                    ║${RESET}"
+        echo -e "${WHITE}║  ${YELLOW}4${WHITE}) Salir                                    ║${RESET}"
+        echo -e "${WHITE}║                                              ║${RESET}"
+        echo -e "${WHITE}╚══════════════════════════════════════════════╝${RESET}"
+        echo
 
-else
+        show_current_theme
 
-    warn "update-grub terminó con un error."
+        read -rp "Selecciona una opción [1-4]: " OPTION
 
-fi
+        case "$OPTION" in
+
+            1)
+                install_amber_bar
+                ;;
+
+            2)
+                restart_system
+                ;;
+
+            3)
+                uninstall_amber_bar
+                ;;
+
+            4)
+                clear
+                echo
+                echo "Saliendo..."
+                echo
+                exit 0
+                ;;
+
+            *)
+                error "Opción inválida."
+                sleep 1
+                ;;
+
+        esac
+
+    done
+}
 
 # ============================================================
-# VERIFICACIÓN FINAL
+# START
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    VERIFICACIÓN"
-echo "============================================================"
-echo
+check_root
 
-info "Tema seleccionado:"
-
-readlink -f \
-    /usr/share/plymouth/themes/default.plymouth \
-    2>/dev/null || true
-
-echo
-
-info "Servicio:"
-
-systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true
-
-echo
-
-info "Archivos Amber Bar:"
-
-echo "    $PLYMOUTH_FILE"
-echo "    $PLYMOUTH_SCRIPT"
-echo "    $GATE_SCRIPT"
-echo "    $SERVICE_FILE"
-
-echo
-
-# ============================================================
-# FINAL
-# ============================================================
-
-echo "============================================================"
-echo "              AMBER BAR INSTALADO"
-echo "============================================================"
-echo
-echo "Tema seleccionado:"
-echo
-echo "    $PLYMOUTH_FILE"
-echo
-echo "Servicio:"
-echo
-echo "    $SERVICE_NAME"
-echo
-echo "El servicio está habilitado para el próximo arranque."
-echo
-echo "No necesitas ejecutar manualmente:"
-echo
-echo "    update-alternatives --set ..."
-echo "    update-initramfs -u"
-echo "    update-grub"
-echo
-echo "Para probar Amber Bar:"
-echo
-echo "    sudo reboot"
-echo
-echo "============================================================"
-echo
+main_menu
