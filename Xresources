@@ -1,15 +1,4 @@
 ! ==========================================================
-! XTERM - CRT ORANGE PHOSPHOR
-! ==========================================================
-
-! Fondo y texto
-XTerm*background: #080604
-XTerm*foreground: #FF5A00
-XTerm*cursorColor: #FF6A00
-
-! ==========================================================
-! ANSI
-! ==========================================================
 
 XTerm*color0:  #080604
 XTerm*color1:  #B83200
@@ -50,4 +39,3 @@ XTerm*cursorUnderLine: false
 XTerm*scrollBar: false
 XTerm*internalBorder: 3
 XTerm*borderWidth: 0
-
