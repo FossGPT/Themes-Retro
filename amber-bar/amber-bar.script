@@ -1,56 +1,56 @@
 Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
 Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 
-screen_width = Window.GetWidth();
-screen_height = Window.GetHeight();
 
-amber_r = 1.0;
-amber_g = 0.65;
-amber_b = 0.0;
+/* =========================================
+   DIMENSIONES EXACTAS DE LA BARRA
+   ========================================= */
 
-bar_width = 600;
-bar_height = 32;
+BAR_WIDTH = 600;
+BAR_HEIGHT = 32;
 
-bar_x = Math.Int((screen_width - bar_width) / 2);
-bar_y = Math.Int(screen_height / 2);
+BORDER = 2;
+PADDING = 7;
+
+SCREEN_WIDTH = Window.GetWidth();
+SCREEN_HEIGHT = Window.GetHeight();
+
+BAR_X = Math.Int((SCREEN_WIDTH - BAR_WIDTH) / 2);
+BAR_Y = Math.Int((SCREEN_HEIGHT - BAR_HEIGHT) / 2);
 
 
-/* Margen interior */
-margin = 7;
-
-
-/* =========================
+/* =========================================
    TEXTO
-   ========================= */
+   ========================================= */
 
 title = Sprite();
 
 title.SetPosition(
-    bar_x,
-    bar_y - 50,
-    0
+    BAR_X,
+    BAR_Y - 50,
+    10
 );
 
 title.SetImage(
     Image.Text(
         "Iniciando sistema...",
-        amber_r,
-        amber_g,
-        amber_b,
+        1.0,
+        0.65,
+        0.0,
         "DejaVu Sans Mono 18"
     )
 );
 
 
-/* =========================
-   BORDE
-   ========================= */
+/* =========================================
+   BORDE EXTERIOR
+   ========================================= */
 
 border = Sprite();
 
 border.SetPosition(
-    bar_x,
-    bar_y,
+    BAR_X,
+    BAR_Y,
     0
 );
 
@@ -59,35 +59,35 @@ border.SetImage(
 );
 
 
-/* =========================
+/* =========================================
    RELLENO
-   ========================= */
+   ========================================= */
 
 progress = Sprite();
 
 progress.SetPosition(
-    bar_x + margin,
-    bar_y + margin,
+    BAR_X + PADDING,
+    BAR_Y + PADDING,
     1
 );
 
 
-/* =========================
+/* =========================================
    PORCENTAJE
-   ========================= */
+   ========================================= */
 
 percentage = Sprite();
 
 percentage.SetPosition(
-    bar_x + bar_width + 20,
-    bar_y + 3,
-    0
+    BAR_X + BAR_WIDTH + 25,
+    BAR_Y + 4,
+    10
 );
 
 
-/* =========================
-   PROGRESO
-   ========================= */
+/* =========================================
+   ACTUALIZACIÓN
+   ========================================= */
 
 fun update_progress(duration, value) {
 
@@ -99,72 +99,78 @@ fun update_progress(duration, value) {
 
 
     /*
-     * Área REAL disponible dentro
-     * del borde.
+     * Área interior REAL.
+     *
+     * 600 - 7 - 7 = 586 px
      */
 
-    inner_width = bar_width - (margin * 2);
-    inner_height = bar_height - (margin * 2);
+    INNER_WIDTH = BAR_WIDTH - (PADDING * 2);
+
+    INNER_HEIGHT = BAR_HEIGHT - (PADDING * 2);
 
 
     /*
-     * Ancho del relleno según
-     * el porcentaje.
+     * Calculamos exclusivamente
+     * el ancho que puede ocupar
+     * el relleno.
      */
 
-    fill_width = Math.Int(
-        inner_width * value
+    FILL_WIDTH = Math.Int(
+        INNER_WIDTH * value
     );
 
 
     /*
-     * Evitamos crear una imagen
-     * con ancho 0.
+     * Si estamos en 0%, no mostramos
+     * ningún relleno.
      */
 
-    if (fill_width < 1)
-        fill_width = 1;
+    if (FILL_WIDTH <= 0) {
+
+        progress.SetOpacity(0);
+
+    } else {
+
+        progress.SetOpacity(1);
 
 
-    /*
-     * Crear el relleno.
-     */
+        /*
+         * Creamos una imagen nueva
+         * exactamente del tamaño permitido.
+         */
 
-    fill = Image("amber-fill.png");
+        fill_image = Image("amber-fill.png");
 
-    fill = fill.Scale(
-        fill_width,
-        inner_height
-    );
+        fill_image = fill_image.Scale(
+            FILL_WIDTH,
+            INNER_HEIGHT
+        );
 
-
-    progress.SetImage(fill);
+        progress.SetImage(fill_image);
+    }
 
 
     /*
      * Porcentaje.
      */
 
-    percent = Math.Int(
-        value * 100
-    );
-
+    PERCENT = Math.Int(value * 100);
 
     percentage.SetImage(
         Image.Text(
-            percent + "%",
-            amber_r,
-            amber_g,
-            amber_b,
+            PERCENT + "%",
+            1.0,
+            0.65,
+            0.0,
             "DejaVu Sans Mono 18"
         )
     );
 }
 
 
-/* =========================
-   PLYMOUTH
-   ========================= */
+/* =========================================
+   CONECTAR CON EL PROGRESO DE PLYMOUTH
+   ========================================= */
 
 Plymouth.SetBootProgressFunction(
     update_progress
