@@ -1,3 +1,106 @@
+Today 1:43 AM
+chatgpt tengo este problema, estoy intentando instalar un tema para el arranque y no se vean todos los servicios que se estan activando pero pasa que se quedo con un tema anterior y no importa que ponga, no se quita
+Pasted code(1).sh
+File
+quiero que me quite ese tiempo para ver si el inittrd no deja de cargar despues de los 10 segundo siga al siguiente
+
+no cambies nada más
+
+Sí. Revisé tu script y ya tenía un límite de 10 segundos, pero además tenía --kill-after=2s, por lo que podía tardar hasta unos 12 segundos antes de continuar. El bloque está en la función update_initramfs_safe.
+
+Hice solo ese cambio:
+
+Ahora espera máximo 10 segundos.
+Al llegar a los 10 segundos, mata update-initramfs.
+El instalador continúa con el siguiente paso.
+No cambié ninguna otra parte del script.
+
+Aquí tienes el archivo modificado:
+
+Descargar script modificado
+
+⚠️ Importante: esto significa que si update-initramfs todavía está trabajando al llegar a los 10 segundos, será terminado a la fuerza. El resto del instalador continuará igualmente. 
+
+amber-bar-installer-10s.sh
+Code
+en esa fase, crea una pequeña animacion de carga, nada complejo
+
+Listo. Añadí una animación de carga pequeña y sencilla únicamente durante la fase de update-initramfs.
+
+Ahora mostrará algo como:
+
+[ | ] Actualizando initramfs... 3s
+[ / ] Actualizando initramfs... 4s
+[ - ] Actualizando initramfs... 5s
+[ \ ] Actualizando initramfs... 6s
+
+Y mantiene el límite de 10 segundos. No cambié ninguna otra parte del instalador.
+
+Descargar el script con la animación 
+
+amber-bar-installer-10s-spinner.sh
+Code
+Today 1:00 PM
+Pasted code(2).sh
+File
+Quiero que me ayudes con el instalador, ese cronometro quiero que se lo quites, el de los 10 segundos, tambie el archivo amber-bar quiero que se coloque en el lugar de instalacion
+
+tambien agregame una pequeña animacion de instalación donde muestre los segundos que falta para que se termine de instalar los paquetes 
+
+Sí. Revisé el instalador que me pasaste y lo adapté manteniendo la estructura original. El script actualmente tiene el límite de 10 segundos en update-initramfs, y también esperaba que amber-bar ya estuviera colocado en /usr/share/plymouth/themes/amber-bar.
+
+Hice estos cambios:
+
+Quité completamente el límite de 10 segundos de update-initramfs.
+
+Ahora espera a que termine realmente.
+Mientras trabaja muestra una animación:
+[ | ] Actualizando initramfs... 05s
+[ / ] Actualizando initramfs... 06s
+[ - ] Actualizando initramfs... 07s
+Añadí una animación durante la instalación de paquetes.
+Instala plymouth y plymouth-themes si hacen falta.
+Muestra los segundos transcurridos mientras apt trabaja.
+No puse un "tiempo restante" falso, porque apt no proporciona un tiempo restante fiable; mostraría segundos transcurridos para que no te engañe el instalador.
+
+Amber Bar ahora puede colocarse automáticamente.
+
+El instalador busca una carpeta:
+amber-bar/
+
+junto al propio instalador.
+
+Si la encuentra, copia su contenido automáticamente a:
+/usr/share/plymouth/themes/amber-bar/
+
+Por ejemplo:
+
+📁 carpeta
+├── amber-bar-installer-final.sh
+└── amber-bar/
+    ├── amber-bar.plymouth
+    ├── amber-bar.script
+    └── ...
+
+Así ya no tienes que copiar manualmente el tema.
+
+No cambié el funcionamiento del menú, instalación del servicio, selección del tema, GRUB ni desinstalación.
+
+Además, comprobé la sintaxis del Bash y no presenta errores de sintaxis.
+
+Descargar el instalador modificado
+
+Importante: necesitas poner la carpeta amber-bar junto al instalador para que pueda copiar el tema automáticamente. El script que me enviaste no contiene dentro de sí los archivos gráficos/script del tema; solo contiene el instalador.
+
+amber-bar-installer-final.sh
+Code
+1 attachment left until tomorrow at 1:44 AM
+Start a free Plus trial for more.
+Try Plus free
+
+Library
+/
+amber-bar-installer-final.sh
 #!/bin/bash
 
 # ============================================================
@@ -30,8 +133,6 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 GATE_SCRIPT="/usr/local/sbin/amber-bar-gate"
 
 ALT_NAME="default.plymouth"
-
-INITRAMFS_TIMEOUT=10
 
 # Archivo donde guardamos la alternativa anterior
 BACKUP_FILE="/var/lib/amber-bar/previous-plymouth"
@@ -117,6 +218,81 @@ check_plymouth()
 }
 
 # ------------------------------------------------------------
+# INSTALAR DEPENDENCIAS
+# ------------------------------------------------------------
+
+install_packages()
+{
+    echo
+    echo "=============================================="
+    echo "          INSTALANDO DEPENDENCIAS"
+    echo "=============================================="
+    echo
+
+    if command -v plymouth >/dev/null 2>&1 &&        dpkg -s plymouth-themes >/dev/null 2>&1; then
+        ok "Plymouth y sus temas ya están instalados."
+        return 0
+    fi
+
+    info "Instalando Plymouth y Plymouth Themes..."
+
+    local LOG_FILE="/tmp/amber-bar-apt.log"
+    local PID
+    local ELAPSED=0
+    local SPINNER='|/-\\'
+    local SPIN_INDEX=0
+    local RESULT
+
+    apt-get update >"$LOG_FILE" 2>&1 &
+    PID=$!
+
+    while kill -0 "$PID" 2>/dev/null; do
+        printf "\r[ %s ] Actualizando paquetes... %02ds transcurridos"             "${SPINNER:$SPIN_INDEX:1}" "$ELAPSED"
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+        SPIN_INDEX=$(( (SPIN_INDEX + 1) % 4 ))
+    done
+    wait "$PID"
+    RESULT=$?
+    printf "\r\033[K"
+
+    if [ "$RESULT" -ne 0 ]; then
+        error "No se pudo actualizar la información de paquetes."
+        tail -n 10 "$LOG_FILE" 2>/dev/null || true
+        rm -f "$LOG_FILE"
+        return 1
+    fi
+
+    ELAPSED=0
+    SPIN_INDEX=0
+
+    apt-get install -y plymouth plymouth-themes >>"$LOG_FILE" 2>&1 &
+    PID=$!
+
+    while kill -0 "$PID" 2>/dev/null; do
+        printf "\r[ %s ] Instalando paquetes... %02ds transcurridos"             "${SPINNER:$SPIN_INDEX:1}" "$ELAPSED"
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+        SPIN_INDEX=$(( (SPIN_INDEX + 1) % 4 ))
+    done
+    wait "$PID"
+    RESULT=$?
+    printf "\r\033[K"
+
+    if [ "$RESULT" -eq 0 ]; then
+        ok "Paquetes instalados correctamente."
+    else
+        error "La instalación de paquetes terminó con código ${RESULT}."
+        tail -n 10 "$LOG_FILE" 2>/dev/null || true
+        rm -f "$LOG_FILE"
+        return 1
+    fi
+
+    rm -f "$LOG_FILE"
+    return 0
+}
+
+# ------------------------------------------------------------
 # MOSTRAR TEMA ACTUAL
 # ------------------------------------------------------------
 
@@ -175,37 +351,42 @@ update_initramfs_safe()
     echo "        ACTUALIZANDO INITRAMFS"
     echo "=============================================="
     echo
-    echo "Tiempo máximo: ${INITRAMFS_TIMEOUT} segundos."
-    echo
 
     info "Ejecutando update-initramfs -u -k all..."
 
-    if timeout \
-        --signal=TERM \
-        --kill-after=2s \
-        "${INITRAMFS_TIMEOUT}s" \
-        update-initramfs -u -k all
-    then
+    local PID
+    local ELAPSED=0
+    local SPINNER='|/-\\'
+    local SPIN_INDEX=0
+    local RESULT
 
+    update-initramfs -u -k all >/tmp/amber-bar-initramfs.log 2>&1 &
+    PID=$!
+
+    while kill -0 "$PID" 2>/dev/null; do
+        printf "\r[ %s ] Actualizando initramfs... %02ds" \
+            "${SPINNER:$SPIN_INDEX:1}" "$ELAPSED"
+
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+        SPIN_INDEX=$(( (SPIN_INDEX + 1) % 4 ))
+    done
+
+    wait "$PID"
+    RESULT=$?
+
+    printf "\r\\033[K"
+
+    if [ "$RESULT" -eq 0 ]; then
         ok "initramfs actualizado correctamente."
-
     else
-
-        RESULT=$?
-
-        if [ "$RESULT" -eq 124 ]; then
-
-            warn "update-initramfs superó ${INITRAMFS_TIMEOUT} segundos."
-            warn "El proceso fue detenido."
-            warn "El instalador continuará."
-
-        else
-
-            warn "update-initramfs terminó con código ${RESULT}."
-            warn "El instalador continuará."
-
-        fi
+        warn "update-initramfs terminó con código ${RESULT}."
+        warn "El instalador continuará."
+        warn "Últimas líneas del proceso:"
+        tail -n 5 /tmp/amber-bar-initramfs.log 2>/dev/null || true
     fi
+
+    rm -f /tmp/amber-bar-initramfs.log
 }
 
 # ------------------------------------------------------------
@@ -239,6 +420,15 @@ install_amber_bar()
     echo
 
     # --------------------------------------------------------
+    # Instalar dependencias
+    # --------------------------------------------------------
+
+    if ! install_packages; then
+        pause
+        return
+    fi
+
+    # --------------------------------------------------------
     # Comprobar Plymouth
     # --------------------------------------------------------
 
@@ -251,14 +441,26 @@ install_amber_bar()
     # Comprobar tema
     # --------------------------------------------------------
 
-    if [ ! -d "$THEME_DIR" ]; then
+    # --------------------------------------------------------
+    # Colocar el tema Amber Bar en su ubicación de instalación
+    # --------------------------------------------------------
 
+    INSTALLER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    SOURCE_THEME_DIR="${INSTALLER_DIR}/${THEME_NAME}"
+
+    if [ -d "$SOURCE_THEME_DIR" ]; then
+        info "Copiando Amber Bar a ${THEME_DIR}..."
+        mkdir -p "$THEME_DIR"
+        cp -a "$SOURCE_THEME_DIR"/. "$THEME_DIR"/
+        ok "Amber Bar colocado en su ubicación de instalación."
+    fi
+
+    if [ ! -d "$THEME_DIR" ]; then
         error "No existe:"
         echo
         echo "    $THEME_DIR"
         echo
-        echo "Debes colocar primero el tema Amber Bar allí."
-
+        echo "Coloca una carpeta 'amber-bar' junto a este instalador."
         pause
         return
     fi
