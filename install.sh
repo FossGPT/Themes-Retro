@@ -1,21 +1,26 @@
 #!/bin/bash
+
 set -u
 
-THEME_NAME="amber-bar"
-THEME_DIR="/usr/share/plymouth/themes/${THEME_NAME}"
-PLYMOUTH_FILE="${THEME_DIR}/${THEME_NAME}.plymouth"
-PLYMOUTH_SCRIPT="${THEME_DIR}/${THEME_NAME}.script"
-SERVICE_NAME="amber-bar-gate.service"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
-GATE_SCRIPT="/usr/local/sbin/amber-bar-gate"
-BACKUP_DIR="/var/lib/amber-bar"
-BACKUP_FILE="${BACKUP_DIR}/previous-plymouth"
-LOG_FILE="/tmp/amber-bar-installer.log"
+APP_NAME="Themes Retro Installer"
+APP_VERSION="1.0.0"
+REPO_URL="https://github.com/FossGPT/Themes-Retro.git"
+REPO_RAW="https://raw.githubusercontent.com/FossGPT/Themes-Retro/main"
+
+INSTALL_DIR="/opt/themes-retro"
+STATE_DIR="/var/lib/themes-retro"
+BACKUP_DIR="/var/backups/themes-retro"
+LOG_FILE="/var/log/themes-retro-installer.log"
+
+CURRENT_THEME_FILE="${STATE_DIR}/current-theme"
+INSTALLED_PACKAGES_FILE="${STATE_DIR}/installed-packages"
+BACKUP_LIST_FILE="${STATE_DIR}/backups"
 
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
 RED="\033[0;31m"
 CYAN="\033[0;36m"
+BLUE="\033[0;34m"
 WHITE="\033[1;37m"
 RESET="\033[0m"
 
@@ -40,11 +45,51 @@ error() {
     printf "%b[ERROR]%b %s\n" "$RED" "$RESET" "$1"
 }
 
+header() {
+    clear
+    printf "%b╔══════════════════════════════════════════════════════╗%b\n" "$WHITE" "$RESET"
+    printf "%b║              THEMES RETRO INSTALLER                 ║%b\n" "$WHITE" "$RESET"
+    printf "%b║                    v%s                         ║%b\n" "$WHITE" "$APP_VERSION" "$RESET"
+    printf "%b╚══════════════════════════════════════════════════════╝%b\n" "$WHITE" "$RESET"
+    echo
+}
+
 check_root() {
-    if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-        error "Este programa debe ejecutarse como root."
-        echo "Ejecuta: sudo bash \"$0\""
+    if [ "$(id -u)" -ne 0 ]; then
+        error "Este instalador debe ejecutarse como root."
+        echo
+        echo "Ejecuta:"
+        echo "sudo bash $0"
         exit 1
+    fi
+}
+
+check_ubuntu() {
+    if [ ! -f /etc/os-release ]; then
+        error "No se pudo determinar la distribución."
+        exit 1
+    fi
+
+    . /etc/os-release
+
+    if [ "${ID:-}" != "ubuntu" ]; then
+        error "Este instalador está diseñado para Ubuntu."
+        exit 1
+    fi
+
+    if [ "${VERSION_ID:-}" != "22.04" ]; then
+        warn "Se detectó Ubuntu ${VERSION_ID:-desconocido}."
+        warn "Este instalador fue diseñado para Ubuntu 22.04."
+        echo
+        read -r -p "¿Deseas continuar? [s/N]: " answer
+
+        case "$answer" in
+            s|S|si|SI|Si|sí|SÍ)
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
     fi
 }
 
@@ -52,320 +97,637 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-show_current_theme() {
-    local current
-    current="$(readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true)"
-
-    echo
-    echo "Tema Plymouth actualmente seleccionado:"
-    if [ -n "$current" ]; then
-        echo "  $current"
-    else
-        echo "  No determinado"
-    fi
-    echo
+package_installed() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
 }
 
-run_with_spinner() {
-    local label="$1"
-    shift
-    local spinner='|/-\'
-    local index=0
-    local elapsed=0
-    local pid
-    local result
+prepare_directories() {
+    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$STATE_DIR"
+    mkdir -p "$BACKUP_DIR"
 
-    "$@" >>"$LOG_FILE" 2>&1 &
-    pid=$!
+    touch "$LOG_FILE"
+    touch "$INSTALLED_PACKAGES_FILE"
+    touch "$BACKUP_LIST_FILE"
+}
 
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r[ %s ] %s %02ds" "${spinner:index:1}" "$label" "$elapsed"
-        sleep 1
-        elapsed=$((elapsed + 1))
-        index=$(( (index + 1) % 4 ))
+install_base_tools() {
+    local packages=(
+        git
+        curl
+        wget
+        ca-certificates
+        software-properties-common
+        xz-utils
+        unzip
+        fontconfig
+    )
+
+    echo
+    echo "Comprobando herramientas necesarias..."
+    echo
+
+    apt-get update >>"$LOG_FILE" 2>&1
+
+    for package in "${packages[@]}"; do
+        if package_installed "$package"; then
+            ok "$package ya está instalado."
+        else
+            info "Instalando $package..."
+            if apt-get install -y "$package" >>"$LOG_FILE" 2>&1; then
+                ok "$package instalado."
+            else
+                error "No se pudo instalar $package."
+                return 1
+            fi
+        fi
+    done
+}
+
+install_desktop_packages() {
+    local packages=(
+        xorg
+        xserver-xorg
+        xserver-xorg-core
+        bspwm
+        sxhkd
+        polybar
+        rofi
+        ranger
+        htop
+    )
+
+    echo
+    echo "======================================================"
+    echo "              INSTALANDO COMPONENTES"
+    echo "======================================================"
+    echo
+
+    for package in "${packages[@]}"; do
+        if package_installed "$package"; then
+            ok "$package ya está instalado. Saltando."
+        else
+            info "Instalando $package..."
+
+            if apt-get install -y "$package" >>"$LOG_FILE" 2>&1; then
+                ok "$package instalado."
+
+                if ! grep -qxF "$package" "$INSTALLED_PACKAGES_FILE"; then
+                    echo "$package" >>"$INSTALLED_PACKAGES_FILE"
+                fi
+            else
+                error "No se pudo instalar $package."
+                return 1
+            fi
+        fi
     done
 
-    wait "$pid"
-    result=$?
-    printf "\r\033[K"
-
-    return "$result"
+    echo
+    ok "Componentes principales instalados."
 }
 
-install_packages() {
-    echo
-    echo "=============================================="
-    echo "          INSTALANDO DEPENDENCIAS"
-    echo "=============================================="
-    echo
+detect_user() {
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        TARGET_USER="$SUDO_USER"
+    else
+        TARGET_USER="$(logname 2>/dev/null || echo root)"
+    fi
 
-    if command_exists plymouth && dpkg-query -W -f='${Status}' plymouth-themes 2>/dev/null | grep -q "install ok installed"; then
-        ok "Plymouth y plymouth-themes ya están instalados."
+    TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+
+    if [ -z "$TARGET_HOME" ]; then
+        TARGET_HOME="/root"
+    fi
+}
+
+backup_file() {
+    local file="$1"
+
+    if [ ! -e "$file" ]; then
         return 0
     fi
 
-    : >"$LOG_FILE"
+    local relative
+    relative="${file#/}"
 
-    info "Actualizando información de paquetes..."
-    if ! run_with_spinner "Actualizando paquetes..." apt-get update; then
-        error "No se pudo actualizar la información de paquetes."
-        tail -n 15 "$LOG_FILE" 2>/dev/null || true
-        return 1
+    local destination
+    destination="${BACKUP_DIR}/${relative}"
+
+    mkdir -p "$(dirname "$destination")"
+
+    cp -a "$file" "$destination"
+
+    if ! grep -qxF "$file" "$BACKUP_LIST_FILE"; then
+        echo "$file" >>"$BACKUP_LIST_FILE"
     fi
 
-    info "Instalando Plymouth y plymouth-themes..."
-    if ! run_with_spinner "Instalando paquetes..." apt-get install -y plymouth plymouth-themes; then
-        error "No se pudieron instalar las dependencias."
-        tail -n 15 "$LOG_FILE" 2>/dev/null || true
-        return 1
-    fi
-
-    ok "Dependencias instaladas correctamente."
-    return 0
+    ok "Copia de seguridad: $file"
 }
 
-check_plymouth() {
-    if ! command_exists plymouth; then
-        error "Plymouth no está instalado."
-        return 1
-    fi
-    return 0
+backup_user_configuration() {
+    echo
+    echo "======================================================"
+    echo "             CREANDO COPIAS DE SEGURIDAD"
+    echo "======================================================"
+    echo
+
+    backup_file "$TARGET_HOME/.config/bspwm"
+    backup_file "$TARGET_HOME/.config/sxhkd"
+    backup_file "$TARGET_HOME/.config/polybar"
+    backup_file "$TARGET_HOME/.config/rofi"
+    backup_file "$TARGET_HOME/.config/ranger"
 }
 
-install_theme_files() {
-    local installer_dir source_dir
+clone_repository() {
+    rm -rf "$INSTALL_DIR/repository"
 
-    installer_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-    source_dir="${installer_dir}/${THEME_NAME}"
+    info "Descargando Themes-Retro..."
 
-    if [ ! -d "$source_dir" ]; then
-        error "No se encontró la carpeta:"
-        echo "  $source_dir"
-        echo
-        echo "La estructura debe ser:"
-        echo "  amber-bar-installer.sh"
-        echo "  amber-bar/"
-        echo "    amber-bar.plymouth"
-        echo "    amber-bar.script"
-        return 1
+    if git clone --depth=1 "$REPO_URL" "$INSTALL_DIR/repository" >>"$LOG_FILE" 2>&1; then
+        ok "Repositorio descargado correctamente."
+        return 0
     fi
 
-    if [ ! -f "${source_dir}/${THEME_NAME}.plymouth" ] || [ ! -f "${source_dir}/${THEME_NAME}.script" ]; then
-        error "La carpeta amber-bar no contiene los archivos necesarios."
-        echo "Se requieren:"
-        echo "  ${THEME_NAME}.plymouth"
-        echo "  ${THEME_NAME}.script"
-        return 1
-    fi
-
-    info "Instalando archivos de Amber Bar..."
-    mkdir -p "$THEME_DIR"
-    cp -a "$source_dir"/. "$THEME_DIR"/
-    chmod -R a+rX "$THEME_DIR"
-
-    if [ ! -f "$PLYMOUTH_FILE" ] || [ ! -f "$PLYMOUTH_SCRIPT" ]; then
-        error "No se pudieron instalar correctamente los archivos del tema."
-        return 1
-    fi
-
-    ok "Amber Bar instalado en $THEME_DIR."
+    error "No se pudo descargar el repositorio."
+    return 1
 }
 
-save_previous_theme() {
-    local current
-    mkdir -p "$BACKUP_DIR"
-    current="$(readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true)"
+copy_directory_if_exists() {
+    local source="$1"
+    local destination="$2"
 
-    if [ -n "$current" ] && [ "$current" != "$PLYMOUTH_FILE" ]; then
-        printf '%s\n' "$current" >"$BACKUP_FILE"
+    if [ ! -d "$source" ]; then
+        warn "No existe: $source"
+        return 0
+    fi
+
+    mkdir -p "$destination"
+    cp -a "$source"/. "$destination"/
+
+    chown -R "$TARGET_USER:$TARGET_USER" "$destination" 2>/dev/null || true
+
+    ok "Configuración instalada en $destination"
+}
+
+install_bspwm() {
+    local source="$INSTALL_DIR/repository/bspwm"
+    local destination="$TARGET_HOME/.config/bspwm"
+
+    if [ ! -d "$source" ]; then
+        warn "No se encontró configuración de bspwm en el repositorio."
+        return 0
+    fi
+
+    copy_directory_if_exists "$source" "$destination"
+}
+
+install_polybar() {
+    local source="$INSTALL_DIR/repository/polybar"
+    local destination="$TARGET_HOME/.config/polybar"
+
+    if [ ! -d "$source" ]; then
+        warn "No se encontró configuración de polybar en el repositorio."
+        return 0
+    fi
+
+    copy_directory_if_exists "$source" "$destination"
+}
+
+install_sxhkd() {
+    local source="$INSTALL_DIR/repository/sxhkd"
+    local destination="$TARGET_HOME/.config/sxhkd"
+
+    if [ ! -d "$source" ]; then
+        warn "No se encontró configuración de sxhkd en el repositorio."
+        return 0
+    fi
+
+    copy_directory_if_exists "$source" "$destination"
+}
+
+install_rofi() {
+    local source="$INSTALL_DIR/repository/rofi"
+    local destination="$TARGET_HOME/.config/rofi"
+
+    if [ !d "$source" ]; then
+        return 0
+    fi
+
+    copy_directory_if_exists "$source" "$destination"
+}
+
+install_ranger() {
+    local source="$INSTALL_DIR/repository/ranger"
+    local destination="$TARGET_HOME/.config/ranger"
+
+    if [ ! -d "$source" ]; then
+        return 0
+    fi
+
+    copy_directory_if_exists "$source" "$destination"
+}
+
+install_system_files() {
+    local source="$INSTALL_DIR/repository/system"
+
+    if [ ! -d "$source" ]; then
+        warn "No existe la carpeta system del repositorio."
+        return 0
+    fi
+
+    if [ -d "$source/etc" ]; then
+        cp -a "$source/etc"/. /etc/
+        ok "Archivos de sistema instalados."
+    fi
+
+    if [ -d "$source/usr" ]; then
+        cp -a "$source/usr"/. /usr/
+        ok "Archivos /usr instalados."
     fi
 }
 
-select_theme() {
-    update-alternatives --install \
-        /usr/share/plymouth/themes/default.plymouth \
-        default.plymouth \
-        "$PLYMOUTH_FILE" \
-        100
+install_startup_files() {
+    local source="$INSTALL_DIR/repository/system_startup"
 
-    update-alternatives --set default.plymouth "$PLYMOUTH_FILE"
-
-    local current
-    current="$(readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true)"
-
-    if [ "$current" != "$PLYMOUTH_FILE" ]; then
-        error "No se pudo seleccionar Amber Bar."
-        echo "Tema actual: ${current:-desconocido}"
-        return 1
+    if [ ! -d "$source" ]; then
+        warn "No existe system_startup."
+        return 0
     fi
 
-    ok "Amber Bar es ahora el tema activo."
+    if [ -d "$source/etc" ]; then
+        cp -a "$source/etc"/. /etc/
+        ok "Configuración de inicio instalada."
+    fi
+
+    if [ -d "$source/usr" ]; then
+        cp -a "$source/usr"/. /usr/
+        ok "Archivos de inicio instalados."
+    fi
 }
 
-create_gate() {
-    cat >"$GATE_SCRIPT" <<'EOF'
-#!/bin/bash
-set -u
+set_permissions() {
+    if [ -d "$TARGET_HOME/.config" ]; then
+        chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.config" 2>/dev/null || true
+    fi
 
-PLYMOUTH="/usr/bin/plymouth"
-FLAG="/run/amber-bar-enter"
+    find "$TARGET_HOME/.config" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
-rm -f "$FLAG"
+    ok "Permisos configurados."
+}
 
-[ -x "$PLYMOUTH" ] || exit 1
+set_bspwm_session() {
+    local session_file="/usr/share/xsessions/bspwm.desktop"
 
-"$PLYMOUTH" display-message --text="__VT320_READY__" >/dev/null 2>&1 || true
-
-"$PLYMOUTH" watch-keystroke \
-    --keys="ENTER" \
-    --command="/usr/bin/touch $FLAG" >/dev/null 2>&1 || true
-
-while [ ! -f "$FLAG" ]; do
-    sleep 0.05
-done
-
-"$PLYMOUTH" quit >/dev/null 2>&1 || true
-exit 0
+    cat >"$session_file" <<EOF
+[Desktop Entry]
+Name=bspwm
+Comment=Binary Space Partitioning Window Manager
+Exec=bspwm
+Type=Application
+DesktopNames=bspwm
 EOF
 
-    chmod 755 "$GATE_SCRIPT"
-    ok "Gate instalado."
+    chmod 644 "$session_file"
+
+    ok "Sesión bspwm registrada."
 }
 
-create_service() {
-    cat >"$SERVICE_FILE" <<EOF
-[Unit]
-Description=Amber Bar Plymouth Boot Gate
-After=plymouth-start.service systemd-user-sessions.service
-Before=plymouth-quit.service plymouth-quit-wait.service display-manager.service
-
-[Service]
-Type=oneshot
-ExecStart=${GATE_SCRIPT}
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    chmod 644 "$SERVICE_FILE"
+enable_services() {
     systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME" >/dev/null
-    ok "Servicio Amber Bar Gate instalado y habilitado."
+
+    if systemctl list-unit-files 2>/dev/null | grep -q "^system_startup.service"; then
+        systemctl enable system_startup.service >/dev/null 2>&1 || true
+    fi
+
+    ok "Servicios actualizados."
 }
 
-update_initramfs_safe() {
-    echo
-    echo "=============================================="
-    echo "             ACTUALIZANDO INITRAMFS"
-    echo "=============================================="
-    echo
+save_theme() {
+    local theme="$1"
 
-    : >"$LOG_FILE"
-    info "Ejecutando update-initramfs -u -k all..."
+    echo "$theme" >"$CURRENT_THEME_FILE"
 
-    if run_with_spinner "Actualizando initramfs..." update-initramfs -u -k all; then
-        ok "initramfs actualizado correctamente."
-        return 0
-    fi
-
-    warn "update-initramfs terminó con errores."
-    tail -n 15 "$LOG_FILE" 2>/dev/null || true
-    return 1
+    chmod 644 "$CURRENT_THEME_FILE"
 }
 
-update_grub_safe() {
-    echo
-    info "Actualizando GRUB..."
-
-    if ! command_exists update-grub; then
-        warn "update-grub no está disponible."
-        return 1
+get_current_theme() {
+    if [ -f "$CURRENT_THEME_FILE" ]; then
+        cat "$CURRENT_THEME_FILE"
+    else
+        echo "Ninguno"
     fi
-
-    if update-grub; then
-        ok "GRUB actualizado."
-        return 0
-    fi
-
-    warn "update-grub terminó con errores."
-    return 1
 }
 
-install_amber_bar() {
-    clear
+install_theme() {
+    local theme="$1"
+    local theme_name="$2"
 
-    echo "============================================================"
-    echo "              INSTALANDO AMBER BAR"
-    echo "============================================================"
+    header
+
+    echo "Tema seleccionado:"
+    echo
+    printf "%b%s%b\n" "$CYAN" "$theme_name" "$RESET"
     echo
 
-    if ! install_packages; then
+    read -r -p "¿Deseas instalar este tema? [s/N]: " answer
+
+    case "$answer" in
+        s|S|si|SI|Si|sí|SÍ)
+            ;;
+        *)
+            info "Instalación cancelada."
+            pause
+            return
+            ;;
+    esac
+
+    prepare_directories
+    detect_user
+
+    echo
+    info "Usuario objetivo: $TARGET_USER"
+    info "Directorio HOME: $TARGET_HOME"
+    echo
+
+    if ! install_base_tools; then
+        error "Falló la instalación de herramientas base."
         pause
         return
     fi
 
-    if ! check_plymouth; then
+    if ! install_desktop_packages; then
+        error "Falló la instalación de componentes."
         pause
         return
     fi
 
-    save_previous_theme
+    backup_user_configuration
 
-    if ! install_theme_files; then
+    if ! clone_repository; then
         pause
         return
     fi
 
-    if ! select_theme; then
-        pause
-        return
-    fi
+    echo
+    echo "======================================================"
+    echo "               INSTALANDO CONFIGURACIÓN"
+    echo "======================================================"
+    echo
 
-    create_gate
-    create_service
+    case "$theme" in
+        "dec-vt330")
+            install_bspwm
+            install_sxhkd
+            install_polybar
+            install_rofi
+            install_ranger
+            ;;
+        "gridcase-1520")
+            install_bspwm
+            install_sxhkd
+            install_polybar
+            install_rofi
+            install_ranger
+            ;;
+    esac
 
-    if ! update_initramfs_safe; then
-        warn "La actualización de initramfs falló."
-        pause
-        return
-    fi
+    install_system_files
+    install_startup_files
 
-    update_grub_safe || true
+    set_permissions
+    set_bspwm_session
+    enable_services
+
+    save_theme "$theme_name"
 
     echo
-    echo "============================================================"
-    echo "              INSTALACIÓN COMPLETA"
-    echo "============================================================"
+    echo "======================================================"
+    echo "             INSTALACIÓN COMPLETADA"
+    echo "======================================================"
     echo
-    echo "Tema activo:"
-    readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true
+    ok "Tema instalado: $theme_name"
     echo
-    echo "Servicio:"
-    systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true
+    echo "Usuario: $TARGET_USER"
+    echo "Entorno: bspwm"
     echo
-    ok "Amber Bar quedó instalado."
+    warn "Es recomendable reiniciar el sistema antes de utilizar"
+    warn "el nuevo entorno gráfico."
     echo
+
     pause
 }
 
-restart_system() {
-    clear
-    echo
-    echo "El sistema se reiniciará en 3 segundos..."
-    sleep 3
-    reboot
+install_menu() {
+    while true; do
+        header
+
+        echo "1) DEC VT330 Basic"
+        echo "2) GRIDcase 1520 Basic"
+        echo "3) Volver"
+        echo
+
+        read -r -p "Selecciona una opción [1-3]: " option
+
+        case "$option" in
+            1)
+                install_theme "dec-vt330" "DEC VT330 Basic"
+                ;;
+            2)
+                install_theme "gridcase-1520" "GRIDcase 1520 Basic"
+                ;;
+            3)
+                return
+                ;;
+            *)
+                error "Opción inválida."
+                sleep 1
+                ;;
+        esac
+    done
 }
 
-uninstall_amber_bar() {
-    clear
+show_theme_versions() {
+    header
 
-    echo "============================================================"
-    echo "              DESINSTALANDO AMBER BAR"
-    echo "============================================================"
+    echo "======================================================"
+    echo "                  TEMAS DISPONIBLES"
+    echo "======================================================"
     echo
 
-    read -r -p "¿Seguro que quieres desinstalar Amber Bar? [s/N]: " answer
+    echo "DEC VT330 Basic"
+    echo "Color principal: #FFB000"
+    echo
+    echo "GRIDcase 1520 Basic"
+    echo "Color principal: #FF5A00"
+    echo
+
+    pause
+}
+
+show_version() {
+    header
+
+    echo "======================================================"
+    echo "                    VERSIÓN"
+    echo "======================================================"
+    echo
+
+    echo "Installer: $APP_VERSION"
+    echo "Repositorio:"
+    echo "$REPO_URL"
+    echo
+    echo "Tema instalado:"
+    echo "$(get_current_theme)"
+    echo
+
+    if [ -d "$INSTALL_DIR/repository/.git" ]; then
+        echo "Commit instalado:"
+        git -C "$INSTALL_DIR/repository" rev-parse --short HEAD 2>/dev/null || echo "No disponible"
+        echo
+    fi
+
+    pause
+}
+
+versions_menu() {
+    while true; do
+        header
+
+        echo "1) Temas versiones"
+        echo "2) Revisar versión"
+        echo "3) Volver"
+        echo
+
+        read -r -p "Selecciona una opción [1-3]: " option
+
+        case "$option" in
+            1)
+                show_theme_versions
+                ;;
+            2)
+                show_version
+                ;;
+            3)
+                return
+                ;;
+            *)
+                error "Opción inválida."
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+restore_backups() {
+    if [ ! -f "$BACKUP_LIST_FILE" ]; then
+        return
+    fi
+
+    echo
+    info "Restaurando configuraciones anteriores..."
+
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+
+        local relative
+        relative="${file#/}"
+
+        local backup
+        backup="${BACKUP_DIR}/${relative}"
+
+        if [ -e "$backup" ]; then
+            rm -rf "$file"
+            mkdir -p "$(dirname "$file")"
+            cp -a "$backup" "$file"
+
+            ok "Restaurado: $file"
+        fi
+    done <"$BACKUP_LIST_FILE"
+}
+
+remove_theme_configuration() {
+    echo
+    info "Eliminando configuraciones del tema..."
+
+    rm -rf "$TARGET_HOME/.config/bspwm"
+    rm -rf "$TARGET_HOME/.config/sxhkd"
+    rm -rf "$TARGET_HOME/.config/polybar"
+    rm -rf "$TARGET_HOME/.config/rofi"
+    rm -rf "$TARGET_HOME/.config/ranger"
+
+    if [ -d "/etc/systemd/system" ]; then
+        find /etc/systemd/system -type f -iname "*themes-retro*" -delete 2>/dev/null || true
+    fi
+
+    systemctl daemon-reload
+
+    ok "Configuraciones del tema eliminadas."
+}
+
+remove_installed_packages() {
+    if [ ! -f "$INSTALLED_PACKAGES_FILE" ]; then
+        return
+    fi
+
+    echo
+    echo "Paquetes instalados por Themes Retro:"
+    echo
+
+    cat "$INSTALLED_PACKAGES_FILE"
+
+    echo
+    read -r -p "¿También quieres eliminar estos paquetes? [s/N]: " answer
+
+    case "$answer" in
+        s|S|si|SI|Si|sí|SÍ)
+            while IFS= read -r package; do
+                [ -z "$package" ] && continue
+
+                if package_installed "$package"; then
+                    info "Eliminando $package..."
+                    apt-get remove -y "$package" >>"$LOG_FILE" 2>&1 || true
+                fi
+            done <"$INSTALLED_PACKAGES_FILE"
+
+            apt-get autoremove -y >>"$LOG_FILE" 2>&1 || true
+
+            ok "Paquetes eliminados."
+            ;;
+        *)
+            info "Los paquetes no serán eliminados."
+            ;;
+    esac
+}
+
+uninstall_theme() {
+    header
+
+    echo "======================================================"
+    echo "                  DESINSTALAR"
+    echo "======================================================"
+    echo
+
+    echo "1) ¿Estas seguro que quieres desinstalar?"
+    echo "2) Volver"
+    echo
+
+    read -r -p "Selecciona una opción [1-2]: " option
+
+    case "$option" in
+        1)
+            ;;
+        2)
+            return
+            ;;
+        *)
+            error "Opción inválida."
+            sleep 1
+            return
+            ;;
+    esac
+
+    echo
+    read -r -p "Esta acción eliminará la configuración del tema. ¿Continuar? [s/N]: " answer
 
     case "$answer" in
         s|S|si|SI|Si|sí|SÍ)
@@ -377,77 +739,107 @@ uninstall_amber_bar() {
             ;;
     esac
 
-    systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
-    systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    detect_user
+    prepare_directories
 
-    rm -f "$SERVICE_FILE" "$GATE_SCRIPT"
-    rm -f /run/amber-bar-enter
-    systemctl daemon-reload
+    remove_theme_configuration
+    restore_backups
+    remove_installed_packages
 
-    update-alternatives --remove default.plymouth "$PLYMOUTH_FILE" >/dev/null 2>&1 || true
-
-    if [ -f "$BACKUP_FILE" ]; then
-        local previous
-        previous="$(cat "$BACKUP_FILE")"
-
-        if [ -f "$previous" ]; then
-            update-alternatives --set default.plymouth "$previous" >/dev/null 2>&1 || true
-        else
-            update-alternatives --auto default.plymouth >/dev/null 2>&1 || true
-        fi
-    else
-        update-alternatives --auto default.plymouth >/dev/null 2>&1 || true
-    fi
-
-    rm -rf "$THEME_DIR"
-    rm -rf "$BACKUP_DIR"
-
-    update_initramfs_safe || true
-    update_grub_safe || true
+    rm -rf "$INSTALL_DIR"
+    rm -f "$CURRENT_THEME_FILE"
 
     echo
-    echo "============================================================"
-    echo "            DESINSTALACIÓN COMPLETA"
-    echo "============================================================"
+    echo "======================================================"
+    echo "           DESINSTALACIÓN COMPLETADA"
+    echo "======================================================"
     echo
-    ok "Amber Bar ha sido eliminado."
+
+    ok "Themes Retro ha sido desinstalado."
     echo
-    echo "Tema Plymouth actual:"
-    readlink -f /usr/share/plymouth/themes/default.plymouth 2>/dev/null || true
+    echo "Las copias de seguridad permanecen en:"
+    echo "$BACKUP_DIR"
     echo
 
     pause
 }
 
+restart_menu() {
+    header
+
+    echo "======================================================"
+    echo "                    REINICIAR"
+    echo "======================================================"
+    echo
+
+    echo "1) ¿Estas seguro que quieres reiniciar?"
+    echo "2) Volver"
+    echo
+
+    read -r -p "Selecciona una opción [1-2]: " option
+
+    case "$option" in
+        1)
+            clear
+            echo
+            echo "El sistema se reiniciará en 5 segundos..."
+            echo
+            sleep 5
+            reboot
+            ;;
+        2)
+            return
+            ;;
+        *)
+            error "Opción inválida."
+            sleep 1
+            ;;
+    esac
+}
+
 main_menu() {
     while true; do
-        clear
+        header
 
+        echo "Tema instalado:"
+        printf "%b%s%b\n" "$CYAN" "$(get_current_theme)" "$RESET"
         echo
-        printf "%b╔══════════════════════════════════════════════╗%b\n" "$WHITE" "$RESET"
-        printf "%b║              AMBER BAR INSTALLER            ║%b\n" "$WHITE" "$RESET"
-        printf "%b╠══════════════════════════════════════════════╣%b\n" "$WHITE" "$RESET"
-        printf "%b║                                              ║%b\n" "$WHITE" "$RESET"
-        printf "%b║  %b1%b) Instalar / actualizar Amber Bar          %b║%b\n" "$WHITE" "$GREEN" "$WHITE" "$WHITE" "$RESET"
-        printf "%b║  %b2%b) Reiniciar sistema                       %b║%b\n" "$WHITE" "$CYAN" "$WHITE" "$WHITE" "$RESET"
-        printf "%b║  %b3%b) Desinstalar Amber Bar                    %b║%b\n" "$WHITE" "$RED" "$WHITE" "$WHITE" "$RESET"
-        printf "%b║  %b4%b) Salir                                    %b║%b\n" "$WHITE" "$YELLOW" "$WHITE" "$WHITE" "$RESET"
-        printf "%b║                                              ║%b\n" "$WHITE" "$RESET"
-        printf "%b╚══════════════════════════════════════════════╝%b\n" "$WHITE" "$RESET"
 
-        show_current_theme
+        echo "1) Instalar"
+        echo "2) Versiones"
+        echo "3) Desinstalar"
+        echo "4) Reiniciar"
+        echo "5) Salir"
+        echo
 
-        read -r -p "Selecciona una opción [1-4]: " option
+        read -r -p "Selecciona una opción [1-5]: " option
 
         case "$option" in
-            1) install_amber_bar ;;
-            2) restart_system ;;
-            3) uninstall_amber_bar ;;
-            4) clear; exit 0 ;;
-            *) error "Opción inválida."; sleep 1 ;;
+            1)
+                install_menu
+                ;;
+            2)
+                versions_menu
+                ;;
+            3)
+                uninstall_theme
+                ;;
+            4)
+                restart_menu
+                ;;
+            5)
+                clear
+                exit 0
+                ;;
+            *)
+                error "Opción inválida."
+                sleep 1
+                ;;
         esac
     done
 }
 
 check_root
+check_ubuntu
+prepare_directories
 main_menu
