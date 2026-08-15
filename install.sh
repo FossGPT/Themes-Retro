@@ -4,14 +4,27 @@ set -u
 set -o pipefail
 
 APP_NAME="Themes Retro"
-APP_VERSION="2.1.0"
+APP_VERSION="2.2.0"
 
 REPO_URL="https://github.com/FossGPT/Themes-Retro.git"
 
 INSTALL_ROOT="/opt/themes-retro"
+REPO_DIR="$INSTALL_ROOT/repository"
+
 STATE_ROOT="/var/lib/themes-retro"
 BACKUP_ROOT="/var/backups/themes-retro"
+
 LOG_FILE="/var/log/themes-retro.log"
+
+TARGET_USER=""
+TARGET_HOME=""
+
+BSPWMRC=""
+SXHKDRC=""
+POLYBAR_CONFIG=""
+
+THEME_NAME=""
+THEME_ID=""
 
 C_RESET="\033[0m"
 C_ORANGE="\033[38;5;208m"
@@ -20,26 +33,22 @@ C_RED="\033[38;5;196m"
 C_CYAN="\033[38;5;51m"
 C_AMBER="\033[38;5;214m"
 C_WHITE="\033[1;37m"
-
-TARGET_USER=""
-TARGET_HOME=""
+C_GRAY="\033[38;5;245m"
 
 declare -A DEP_LABEL=(
-    [git]="Git"
     [xorg]="Xorg"
     [xinit]="xinit / startx"
-    [x11-xserver-utils]="X11 utilities / xrdb"
+    [x11-xserver-utils]="X11 Utilities"
     [bspwm]="bspwm"
     [sxhkd]="sxhkd"
     [polybar]="Polybar"
     [rofi]="Rofi"
     [ranger]="Ranger"
     [htop]="htop"
-    [xterm]="XTerm"
+    [plymouth]="Plymouth"
 )
 
 DEP_LIST=(
-    git
     xorg
     xinit
     x11-xserver-utils
@@ -49,77 +58,221 @@ DEP_LIST=(
     rofi
     ranger
     htop
-    xterm
+    plymouth
 )
 
-log_msg() {
-    printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+clear_screen() {
+    clear
 }
 
-msg() {
-    printf '%b%s%b\n' "$C_CYAN" "$1" "$C_RESET"
+log() {
+    printf '[%s] %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" \
+        "$1" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-ok() {
-    printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$1"
+run_visible() {
+
+    printf '\n%b[PROC]%b %s\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$*"
+
+    log "COMMAND: $*"
+
+    "$@" 2>&1 | tee -a "$LOG_FILE"
+
+    local status=${PIPESTATUS[0]}
+
+    if [[ "$status" -eq 0 ]]; then
+        printf '%b[ OK ]%b Comando completado.\n' \
+            "$C_GREEN" \
+            "$C_RESET"
+    else
+        printf '%b[FAIL]%b El comando terminó con código %s.\n' \
+            "$C_RED" \
+            "$C_RESET" \
+            "$status"
+    fi
+
+    return "$status"
 }
 
-warn() {
-    printf '%b[WARN]%b %s\n' "$C_AMBER" "$C_RESET" "$1"
+info() {
+    printf '%b[INFO]%b %s\n' \
+        "$C_CYAN" \
+        "$C_RESET" \
+        "$1"
 }
 
-err() {
-    printf '%b[ERROR]%b %s\n' "$C_RED" "$C_RESET" "$1"
+success() {
+    printf '%b[ OK ]%b %s\n' \
+        "$C_GREEN" \
+        "$C_RESET" \
+        "$1"
+}
+
+warning() {
+    printf '%b[WARN]%b %s\n' \
+        "$C_AMBER" \
+        "$C_RESET" \
+        "$1"
+}
+
+error_msg() {
+    printf '%b[ERROR]%b %s\n' \
+        "$C_RED" \
+        "$C_RESET" \
+        "$1"
+}
+
+pause_screen() {
+    echo
+    read -r -p "Presiona ENTER para continuar..." _
+}
+
+draw_header() {
+
+    clear_screen
+
+    printf '%b╔══════════════════════════════════════════════════════════════╗%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b║                       THEMES RETRO                          ║%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b║                  INSTALLER v%-8s                     ║%b\n' \
+        "$C_ORANGE" \
+        "$APP_VERSION" \
+        "$C_RESET"
+
+    printf '%b╚══════════════════════════════════════════════════════════════╝%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf ' Usuario : %b%s%b\n' \
+        "$C_GREEN" \
+        "$TARGET_USER" \
+        "$C_RESET"
+
+    printf ' HOME    : %b%s%b\n' \
+        "$C_GREEN" \
+        "$TARGET_HOME" \
+        "$C_RESET"
+
+    printf ' Tema    : %b%s%b\n\n' \
+        "$C_GREEN" \
+        "$(current_theme)" \
+        "$C_RESET"
 }
 
 require_root() {
 
-    if [[ $EUID -ne 0 ]]; then
+    if [[ "$EUID" -ne 0 ]]; then
         exec sudo -E bash "$0" "$@"
+    fi
+}
+
+check_ubuntu() {
+
+    if [[ ! -f /etc/os-release ]]; then
+        error_msg "No se pudo detectar el sistema operativo."
+        exit 1
+    fi
+
+    source /etc/os-release
+
+    if [[ "${ID:-}" != "ubuntu" ]]; then
+
+        error_msg "Este instalador solamente funciona en Ubuntu."
+
+        echo
+        echo "Sistema detectado:"
+        echo "${PRETTY_NAME:-desconocido}"
+
+        exit 1
+    fi
+
+    if [[ "${VERSION_ID:-}" != "22.04" ]]; then
+
+        error_msg "Este instalador está diseñado para Ubuntu Server 22.04."
+
+        echo
+        echo "Versión detectada:"
+        echo "${VERSION_ID:-desconocida}"
+
+        exit 1
     fi
 }
 
 detect_user() {
 
-    local candidate=""
+    local user=""
 
-    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
-        candidate="$SUDO_USER"
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
 
-    elif [[ -n "${USER:-}" && "$USER" != "root" ]]; then
-        candidate="$USER"
+        user="$SUDO_USER"
+
+    elif [[ -n "${USER:-}" && "${USER}" != "root" ]]; then
+
+        user="$USER"
 
     else
-        candidate="$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd)"
+
+        user="$(
+            awk -F: '
+                $3 >= 1000 && $3 < 60000 {
+                    print $1
+                    exit
+                }
+            ' /etc/passwd
+        )"
+
     fi
 
-    if [[ -z "$candidate" ]] || ! id "$candidate" >/dev/null 2>&1; then
-        err "No se pudo determinar el usuario gráfico."
+    if [[ -z "$user" ]]; then
+
+        error_msg "No se pudo detectar el usuario."
+
         exit 1
     fi
 
-    TARGET_USER="$candidate"
+    if ! id "$user" >/dev/null 2>&1; then
 
-    TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+        error_msg "El usuario $user no existe."
 
-    if [[ -z "$TARGET_HOME" || ! -d "$TARGET_HOME" ]]; then
-        err "No existe HOME para $TARGET_USER."
+        exit 1
+    fi
+
+    TARGET_USER="$user"
+
+    TARGET_HOME="$(
+        getent passwd "$TARGET_USER" |
+        cut -d: -f6
+    )"
+
+    if [[ -z "$TARGET_HOME" ]]; then
+
+        error_msg "No se encontró el HOME del usuario."
+
         exit 1
     fi
 }
 
-prepare_state() {
+prepare_directories() {
 
+    mkdir -p "$INSTALL_ROOT"
     mkdir -p "$STATE_ROOT"
     mkdir -p "$BACKUP_ROOT"
-    mkdir -p "$INSTALL_ROOT"
 
     touch "$LOG_FILE"
 
     touch "$STATE_ROOT/installed_packages"
-    touch "$STATE_ROOT/backups"
     touch "$STATE_ROOT/created_files"
     touch "$STATE_ROOT/modified_files"
+    touch "$STATE_ROOT/backups"
     touch "$STATE_ROOT/installed_themes"
 }
 
@@ -132,66 +285,107 @@ pkg_installed() {
         grep -q '^install ok installed$'
 }
 
-ensure_apt_updated() {
+ensure_whiptail() {
 
-    if [[ ! -f "$STATE_ROOT/apt_updated" ]] ||
-       find "$STATE_ROOT/apt_updated" -mmin +60 -print -quit 2>/dev/null | grep -q .
-    then
-
-        msg "Actualizando índices de APT..."
-
-        if apt-get update >> "$LOG_FILE" 2>&1; then
-
-            touch "$STATE_ROOT/apt_updated"
-
-            ok "APT actualizado."
-
-        else
-
-            err "No se pudo actualizar APT."
-
-            echo
-            echo "Revisa:"
-            echo "$LOG_FILE"
-
-            return 1
-        fi
+    if command -v whiptail >/dev/null 2>&1; then
+        return 0
     fi
+
+    apt-get update >> "$LOG_FILE" 2>&1 || return 1
+
+    apt-get install \
+        -y \
+        whiptail \
+        >> "$LOG_FILE" 2>&1
 }
 
-backup_path() {
+ensure_apt() {
 
-    local path="$1"
-    local rel
-    local dest
+    info "Actualizando los repositorios de Ubuntu..."
 
-    [[ -e "$path" || -L "$path" ]] || return 0
+    if apt-get update >> "$LOG_FILE" 2>&1; then
 
-    if [[ "$path" == "$TARGET_HOME/"* ]]; then
+        success "Repositorios actualizados."
 
-        rel="home/${TARGET_USER}/${path#"$TARGET_HOME/"}"
+        return 0
 
-    elif [[ "$path" == /etc/* ]]; then
+    fi
 
-        rel="etc/${path#/etc/}"
+    error_msg "No se pudo actualizar APT."
+
+    return 1
+}
+
+current_theme() {
+
+    if [[ -f "$STATE_ROOT/current_theme" ]]; then
+
+        cat "$STATE_ROOT/current_theme"
 
     else
 
-        rel="other/${path#/}"
+        echo "Ninguno"
+
+    fi
+}
+
+tui_msg() {
+
+    whiptail \
+        --title "$APP_NAME" \
+        --msgbox "$1" \
+        15 \
+        78
+}
+
+tui_yesno() {
+
+    whiptail \
+        --title "$APP_NAME" \
+        --yesno "$1" \
+        15 \
+        78
+}
+
+backup_file() {
+
+    local source="$1"
+
+    [[ -e "$source" || -L "$source" ]] || return 0
+
+    local relative
+    local destination
+
+    if [[ "$source" == "$TARGET_HOME/"* ]]; then
+
+        relative="home/${TARGET_USER}/${source#"$TARGET_HOME/"}"
+
+    elif [[ "$source" == /usr/share/* ]]; then
+
+        relative="usr/share/${source#/usr/share/}"
+
+    elif [[ "$source" == /etc/* ]]; then
+
+        relative="etc/${source#/etc/}"
+
+    else
+
+        relative="other/${source#/}"
 
     fi
 
-    dest="$BACKUP_ROOT/$rel"
+    destination="$BACKUP_ROOT/$relative"
 
-    mkdir -p "$(dirname "$dest")"
+    mkdir -p "$(dirname "$destination")"
 
-    rm -rf "$dest"
+    rm -rf "$destination"
 
-    cp -a "$path" "$dest"
+    cp -a "$source" "$destination"
 
     printf '%s|%s\n' \
-        "$path" \
-        "$dest" >> "$STATE_ROOT/backups"
+        "$source" \
+        "$destination" \
+        >> "$STATE_ROOT/backups"
 }
 
 record_created() {
@@ -208,507 +402,254 @@ record_modified() {
         echo "$1" >> "$STATE_ROOT/modified_files"
 }
 
-safe_install_file() {
+copy_file_safe() {
 
     local source="$1"
-    local dest="$2"
+    local destination="$2"
     local mode="${3:-0644}"
 
     if [[ ! -f "$source" ]]; then
 
-        warn "No existe: $source"
+        warning "Archivo no encontrado: $source"
 
         return 1
     fi
 
-    mkdir -p "$(dirname "$dest")"
+    mkdir -p "$(dirname "$destination")"
 
-    if [[ -e "$dest" || -L "$dest" ]]; then
+    if [[ -e "$destination" || -L "$destination" ]]; then
 
-        backup_path "$dest"
+        backup_file "$destination"
 
-        record_modified "$dest"
+        record_modified "$destination"
 
     else
 
-        record_created "$dest"
+        record_created "$destination"
 
     fi
 
     install \
         -m "$mode" \
         "$source" \
-        "$dest"
+        "$destination"
+
+    success "$destination"
 }
 
-ensure_whiptail() {
-
-    if command -v whiptail >/dev/null 2>&1; then
-        return 0
-    fi
-
-    ensure_apt_updated || return 1
-
-    msg "Instalando whiptail para la interfaz TUI..."
-
-    apt-get install \
-        -y \
-        whiptail \
-        >> "$LOG_FILE" 2>&1
-}
-
-tui_msgbox() {
-
-    whiptail \
-        --title "$APP_NAME" \
-        --msgbox "$1" \
-        12 \
-        76
-}
-
-tui_yesno() {
-
-    whiptail \
-        --title "$APP_NAME" \
-        --yesno "$1" \
-        14 \
-        76
-}
-
-pause_screen() {
-
-    echo
-
-    read -r \
-        -p "Presiona ENTER para continuar..." _
-}
-
-current_theme() {
-
-    if [[ -f "$STATE_ROOT/current_theme" ]]; then
-
-        cat "$STATE_ROOT/current_theme"
-
-    else
-
-        echo "Ninguno"
-
-    fi
-}
-
-draw_header() {
-
-    clear
-
-    printf '%b╔══════════════════════════════════════════════════════════════╗%b\n' \
-        "$C_ORANGE" "$C_RESET"
-
-    printf '%b║                       THEMES RETRO                          ║%b\n' \
-        "$C_ORANGE" "$C_RESET"
-
-    printf '%b║                    Installer v%-8s                    ║%b\n' \
-        "$C_ORANGE" \
-        "$APP_VERSION" \
-        "$C_RESET"
-
-    printf '%b╚══════════════════════════════════════════════════════════════╝%b\n\n' \
-        "$C_ORANGE" "$C_RESET"
-
-    printf ' Usuario: %b%s%b\n' \
-        "$C_GREEN" \
-        "$TARGET_USER" \
-        "$C_RESET"
-
-    printf ' Home:    %b%s%b\n' \
-        "$C_GREEN" \
-        "$TARGET_HOME" \
-        "$C_RESET"
-
-    printf ' Tema:    %b%s%b\n\n' \
-        "$C_GREEN" \
-        "$(current_theme)" \
-        "$C_RESET"
-}
-
-install_selected_dependencies() {
-
-    local selected=( "$@" )
-
-    local packages=()
-    local p
-    local summary=""
-
-    for p in "${selected[@]}"; do
-
-        [[ -n "$p" ]] || continue
-
-        if ! pkg_installed "$p"; then
-            packages+=( "$p" )
-        fi
-
-    done
-
-    if ((${#packages[@]} == 0)); then
-
-        tui_msgbox \
-            "No hay dependencias nuevas que instalar."
-
-        return
-    fi
-
-    for p in "${packages[@]}"; do
-
-        summary+="• ${DEP_LABEL[$p]}\n"
-
-    done
-
-    if ! tui_yesno \
-        "Se instalarán:\n\n$summary\n¿Continuar?"
-    then
-        return
-    fi
-
-    ensure_apt_updated || return 1
-
-    for p in "${packages[@]}"; do
-
-        msg "Instalando ${DEP_LABEL[$p]}..."
-
-        if apt-get install \
-            -y \
-            "$p" \
-            >> "$LOG_FILE" 2>&1
-        then
-
-            ok "${DEP_LABEL[$p]} instalado."
-
-            grep -Fxq \
-                "$p" \
-                "$STATE_ROOT/installed_packages" ||
-                echo "$p" >> "$STATE_ROOT/installed_packages"
-
-        else
-
-            err "No se pudo instalar $p."
-
-        fi
-
-    done
-
-    tui_msgbox \
-        "Proceso terminado.\n\nLos paquetes que ya estaban instalados no fueron reinstalados."
-}
-
-dependencies_menu() {
-
-    while true; do
-
-        draw_header
-
-        local choices=()
-        local p
-        local state
-        local output
-
-        for p in "${DEP_LIST[@]}"; do
-
-            state="OFF"
-
-            if pkg_installed "$p"; then
-                state="ON"
-            fi
-
-            choices+=(
-                "$p"
-                "${DEP_LABEL[$p]}"
-                "$state"
-            )
-
-        done
-
-        output="$(
-            whiptail \
-                --title "Instalar dependencias" \
-                --checklist \
-                "Selecciona los componentes.\nLos ya instalados aparecen marcados." \
-                24 \
-                84 \
-                12 \
-                "${choices[@]}" \
-                3>&1 \
-                1>&2 \
-                2>&3
-        )" || return
-
-        output="${output//\"/}"
-
-        # shellcheck disable=SC2086
-        install_selected_dependencies $output
-
-        if ! tui_yesno \
-            "¿Quieres volver a seleccionar dependencias?"
-        then
-            return
-        fi
-
-    done
-}
-
-dependency_status() {
-
-    local text=""
-    local p
-
-    for p in "${DEP_LIST[@]}"; do
-
-        if pkg_installed "$p"; then
-
-            text+="[ INSTALADO ] ${DEP_LABEL[$p]}\n"
-
-        else
-
-            text+="[ FALTANTE  ] ${DEP_LABEL[$p]}\n"
-
-        fi
-
-    done
-
-    tui_msgbox "$text"
-}
-
-clone_or_update_repo() {
-
-    local repo="$INSTALL_ROOT/repository"
-    local commit
-
-    if [[ -d "$repo/.git" ]]; then
-
-        msg "Actualizando Themes-Retro..."
-
-        git \
-            -C "$repo" \
-            fetch \
-            --quiet \
-            origin \
-            main \
-            >> "$LOG_FILE" 2>&1 || true
-
-        git \
-            -C "$repo" \
-            reset \
-            --hard \
-            origin/main \
-            >> "$LOG_FILE" 2>&1 ||
-        {
-            err "No se pudo actualizar el repositorio."
-            return 1
-        }
-
-    else
-
-        msg "Descargando Themes-Retro..."
-
-        rm -rf "$repo"
-
-        git clone \
-            --depth=1 \
-            "$REPO_URL" \
-            "$repo" \
-            >> "$LOG_FILE" 2>&1 ||
-        {
-            err "No se pudo clonar el repositorio."
-            return 1
-        }
-
-    fi
-
-    commit="$(
-        git \
-            -C "$repo" \
-            rev-parse \
-            --short \
-            HEAD \
-            2>/dev/null ||
-            echo unknown
-    )"
-
-    echo "$commit" > "$STATE_ROOT/repo_commit"
-
-    ok "Repositorio listo. Commit: $commit"
-}
-
-theme_paths() {
-
-    case "$1" in
-
-        vt330)
-
-            BSP_DIR="$INSTALL_ROOT/repository/bspwm/theme_DEV_VT330_basic"
-
-            POLY_DIR="$INSTALL_ROOT/repository/polybar/theme_DEV_VT330_basic_polybar"
-
-            THEME_NAME="DEC VT330 Basic"
-
-            ;;
-
-        gridcase)
-
-            BSP_DIR="$INSTALL_ROOT/repository/bspwm/theme_GRIDcase_1520_basic"
-
-            POLY_DIR="$INSTALL_ROOT/repository/polybar/theme_GRIDcase_1520_basic_polybar"
-
-            THEME_NAME="GRIDcase 1520 Basic"
-
-            ;;
-
-        *)
-
-            return 1
-
-            ;;
-
-    esac
-}
-
-missing_theme_dependencies() {
-
-    local missing=()
-    local p
-
-    for p in "${DEP_LIST[@]}"; do
-
-        if ! pkg_installed "$p"; then
-
-            missing+=( "$p" )
-
-        fi
-
-    done
-
-    printf '%s\n' "${missing[@]}"
-}
-
-all_theme_dependencies_present() {
-
-    local p
-
-    for p in "${DEP_LIST[@]}"; do
-
-        if ! pkg_installed "$p"; then
-
-            return 1
-
-        fi
-
-    done
-
-    return 0
-}
-
-install_xinitrc() {
-
-    local dest="$TARGET_HOME/.xinitrc"
-
-    if [[ -e "$dest" ]]; then
-
-        backup_path "$dest"
-
-        record_modified "$dest"
-
-    else
-
-        record_created "$dest"
-
-    fi
-
-    cat > "$dest" <<'EOF'
-#!/usr/bin/env sh
-
-if command -v xrdb >/dev/null 2>&1 && [ -f "$HOME/.Xresources" ]; then
-    xrdb -merge "$HOME/.Xresources"
-fi
-
-pgrep -x sxhkd >/dev/null 2>&1 || sxhkd &
-
-exec bspwm
-EOF
-
-    chmod 700 "$dest"
-}
-
-install_xresources() {
+copy_directory_contents() {
 
     local source="$1"
-    local dest="$TARGET_HOME/.Xresources"
+    local destination="$2"
 
-    if [[ -f "$source" ]]; then
+    if [[ ! -d "$source" ]]; then
 
-        safe_install_file \
-            "$source" \
-            "$dest"
+        warning "Directorio no encontrado: $source"
 
-    elif [[ ! -e "$dest" ]]; then
-
-        record_created "$dest"
-
-        printf '%s\n' \
-            '! Themes Retro Xresources' \
-            > "$dest"
-
+        return 1
     fi
+
+    mkdir -p "$destination"
+
+    shopt -s dotglob nullglob
+
+    local item
+    local name
+    local target
+
+    for item in "$source"/*; do
+
+        name="$(basename "$item")"
+
+        target="$destination/$name"
+
+        if [[ -e "$target" || -L "$target" ]]; then
+
+            backup_file "$target"
+
+            record_modified "$target"
+
+        else
+
+            record_created "$target"
+
+        fi
+
+        cp -a "$item" "$target"
+
+    done
+
+    shopt -u dotglob nullglob
+
+    chown \
+        -R \
+        "$TARGET_USER:$TARGET_USER" \
+        "$destination" \
+        2>/dev/null || true
 }
 
-install_bspwm_theme() {
+find_example_file() {
 
-    local source="$BSP_DIR/bspwm"
-    local dest="$TARGET_HOME/.config/bspwm/bspwmrc"
+    local filename="$1"
+    shift
+
+    local path
+
+    for path in "$@"; do
+
+        if [[ -f "$path" ]]; then
+
+            echo "$path"
+
+            return 0
+
+        fi
+
+    done
+
+    local found
+
+    found="$(
+        find /usr/share/doc \
+            -type f \
+            -name "$filename" \
+            -print \
+            2>/dev/null |
+        head -n1
+    )"
+
+    if [[ -n "$found" ]]; then
+
+        echo "$found"
+
+        return 0
+
+    fi
+
+    return 1
+}
+
+install_bspwm_dependency_config() {
+
+    local destination="$TARGET_HOME/.config/bspwm/bspwmrc"
 
     mkdir -p \
         "$TARGET_HOME/.config/bspwm"
 
-    safe_install_file \
-        "$source" \
-        "$dest" \
-        0755 ||
-        return 1
+    BSPWMRC="$(
+        find_example_file \
+            "bspwmrc" \
+            "/usr/share/doc/bspwm/examples/bspwmrc" \
+            "/usr/share/doc/bspwm/examples/bspwmrc.gz"
+    )" || true
 
-    sed -i \
-        's#/home/dec/.config/polybar/config.ini#$HOME/.config/polybar/config.ini#g' \
-        "$dest"
+    if [[ -n "$BSPWMRC" ]]; then
 
-    chmod 755 "$dest"
+        if [[ "$BSPWMRC" == *.gz ]]; then
+
+            if [[ -e "$destination" ]]; then
+                backup_file "$destination"
+                record_modified "$destination"
+            else
+                record_created "$destination"
+            fi
+
+            gzip -cd "$BSPWMRC" > "$destination"
+
+            chmod 755 "$destination"
+
+        else
+
+            copy_file_safe \
+                "$BSPWMRC" \
+                "$destination" \
+                0755
+
+        fi
+
+        chown \
+            "$TARGET_USER:$TARGET_USER" \
+            "$destination"
+
+        success "Configuración base de bspwm instalada."
+
+    else
+
+        if [[ ! -e "$destination" ]]; then
+
+            record_created "$destination"
+
+            cat > "$destination" <<'EOF'
+#!/usr/bin/env sh
+
+sxhkd &
+EOF
+
+            chmod 755 "$destination"
+
+            chown \
+                "$TARGET_USER:$TARGET_USER" \
+                "$destination"
+
+            success "Se creó un bspwmrc básico."
+
+        fi
+    fi
 }
 
-install_sxhkd_theme() {
+install_sxhkd_dependency_config() {
 
-    local source=""
-    local dest="$TARGET_HOME/.config/sxhkd/sxhkdrc"
+    local destination="$TARGET_HOME/.config/sxhkd/sxhkdrc"
 
     mkdir -p \
         "$TARGET_HOME/.config/sxhkd"
 
-    source="$(
-        find \
-            "$BSP_DIR" \
-            -type f \
-            -name 'sxhkdrc' \
-            -print \
-            -quit \
-            2>/dev/null ||
-            true
-    )"
+    SXHKDRC="$(
+        find_example_file \
+            "sxhkdrc" \
+            "/usr/share/doc/sxhkd/examples/sxhkdrc" \
+            "/usr/share/doc/sxhkd/examples/sxhkdrc.gz"
+    )" || true
 
-    if [[ -n "$source" ]]; then
+    if [[ -n "$SXHKDRC" ]]; then
 
-        safe_install_file \
-            "$source" \
-            "$dest"
+        if [[ "$SXHKDRC" == *.gz ]]; then
 
-    elif [[ ! -f "$dest" ]]; then
+            if [[ -e "$destination" ]]; then
+                backup_file "$destination"
+                record_modified "$destination"
+            else
+                record_created "$destination"
+            fi
 
-        record_created "$dest"
+            gzip -cd "$SXHKDRC" > "$destination"
 
-        cat > "$dest" <<'EOF'
+            chmod 644 "$destination"
+
+        else
+
+            copy_file_safe \
+                "$SXHKDRC" \
+                "$destination" \
+                0644
+
+        fi
+
+        chown \
+            "$TARGET_USER:$TARGET_USER" \
+            "$destination"
+
+        success "Configuración base de sxhkd instalada."
+
+    else
+
+        if [[ ! -e "$destination" ]]; then
+
+            record_created "$destination"
+
+            cat > "$destination" <<'EOF'
+# Themes Retro - sxhkd
+
 super + Return
     xterm
 
@@ -722,49 +663,566 @@ super + alt + q
     bspc quit
 EOF
 
-        warn \
-            "El repositorio no contiene sxhkdrc; se creó una configuración base."
+            chmod 644 "$destination"
 
+            chown \
+                "$TARGET_USER:$TARGET_USER" \
+                "$destination"
+
+            success "Se creó un sxhkdrc básico."
+
+        fi
     fi
-
-    chmod 644 "$dest"
 }
 
-install_polybar_theme() {
+install_polybar_dependency_config() {
 
-    local source="$POLY_DIR/config.ini"
-    local dest="$TARGET_HOME/.config/polybar/config.ini"
+    local destination="$TARGET_HOME/.config/polybar/config.ini"
 
     mkdir -p \
         "$TARGET_HOME/.config/polybar"
 
-    safe_install_file \
-        "$source" \
-        "$dest" ||
-        return 1
+    POLYBAR_CONFIG="$(
+        find_example_file \
+            "config.ini" \
+            "/usr/share/doc/polybar/examples/config.ini" \
+            "/usr/share/doc/polybar/examples/config.ini.gz"
+    )" || true
 
-    sed -i \
-        's/^interface = eth0$/interface = ${env:NETWORK_INTERFACE:eth0}/' \
-        "$dest"
+    if [[ -n "$POLYBAR_CONFIG" ]]; then
 
-    local launch="$TARGET_HOME/.config/polybar/launch.sh"
+        if [[ "$POLYBAR_CONFIG" == *.gz ]]; then
 
-    if [[ -e "$launch" ]]; then
+            if [[ -e "$destination" ]]; then
+                backup_file "$destination"
+                record_modified "$destination"
+            else
+                record_created "$destination"
+            fi
 
-        backup_path "$launch"
+            gzip -cd "$POLYBAR_CONFIG" > "$destination"
 
-        record_modified "$launch"
+            chmod 644 "$destination"
+
+        else
+
+            copy_file_safe \
+                "$POLYBAR_CONFIG" \
+                "$destination" \
+                0644
+
+        fi
+
+        chown \
+            "$TARGET_USER:$TARGET_USER" \
+            "$destination"
+
+        success "Configuración base de Polybar instalada."
 
     else
 
-        record_created "$launch"
+        if [[ ! -e "$destination" ]]; then
+
+            record_created "$destination"
+
+            cat > "$destination" <<'EOF'
+[bar/main]
+width = 100%
+height = 24
+bottom = false
+
+background = #00000000
+foreground = #FFFFFF
+
+modules-left = xworkspaces
+modules-right = date
+
+[module/xworkspaces]
+type = internal/xworkspaces
+
+[module/date]
+type = internal/date
+date = %Y-%m-%d
+time = %H:%M:%S
+label = %date% %time%
+
+[settings]
+screenchange-reload = true
+pseudo-transparency = true
+EOF
+
+            chmod 644 "$destination"
+
+            chown \
+                "$TARGET_USER:$TARGET_USER" \
+                "$destination"
+
+            success "Se creó un config.ini básico de Polybar."
+
+        fi
+    fi
+}
+
+install_xinitrc() {
+
+    local destination="$TARGET_HOME/.xinitrc"
+
+    if [[ -e "$destination" ]]; then
+
+        backup_file "$destination"
+
+        record_modified "$destination"
+
+    else
+
+        record_created "$destination"
 
     fi
 
-    cat > "$launch" <<'EOF'
+    cat > "$destination" <<'EOF'
+#!/usr/bin/env sh
+
+if command -v xrdb >/dev/null 2>&1; then
+    if [ -f "$HOME/.Xresources" ]; then
+        xrdb -merge "$HOME/.Xresources"
+    fi
+fi
+
+if command -v sxhkd >/dev/null 2>&1; then
+    pgrep -x sxhkd >/dev/null 2>&1 || sxhkd &
+fi
+
+if command -v polybar >/dev/null 2>&1; then
+    if [ -x "$HOME/.config/polybar/launch.sh" ]; then
+        "$HOME/.config/polybar/launch.sh" &
+    fi
+fi
+
+exec bspwm
+EOF
+
+    chmod 700 "$destination"
+
+    chown \
+        "$TARGET_USER:$TARGET_USER" \
+        "$destination"
+
+    success "Creado $destination"
+}
+
+install_dependency_configs() {
+
+    info "Creando configuraciones base..."
+
+    install_bspwm_dependency_config
+
+    install_sxhkd_dependency_config
+
+    install_polybar_dependency_config
+
+    install_xinitrc
+
+    mkdir -p \
+        "$TARGET_HOME/.config/bspwm" \
+        "$TARGET_HOME/.config/sxhkd" \
+        "$TARGET_HOME/.config/polybar"
+
+    chown \
+        -R \
+        "$TARGET_USER:$TARGET_USER" \
+        "$TARGET_HOME/.config" \
+        2>/dev/null || true
+
+    success "Configuraciones base creadas."
+}
+
+install_dependencies() {
+
+    local selected=("$@")
+    local packages=()
+    local p
+    local text=""
+
+    for p in "${selected[@]}"; do
+
+        [[ -n "$p" ]] || continue
+
+        if ! pkg_installed "$p"; then
+
+            packages+=("$p")
+
+        fi
+
+    done
+
+    if ((${#packages[@]} == 0)); then
+
+        tui_msg \
+            "Todas las dependencias seleccionadas ya están instaladas."
+
+        return
+    fi
+
+    for p in "${packages[@]}"; do
+
+        text+="• ${DEP_LABEL[$p]}\n"
+    done
+
+    if ! tui_yesno \
+        "Se instalarán las siguientes dependencias:\n\n$text\n¿Continuar?"
+    then
+
+        return
+
+    fi
+
+    ensure_apt || return
+
+    for p in "${packages[@]}"; do
+
+        info "Instalando ${DEP_LABEL[$p]}..."
+
+        if apt-get install \
+            -y \
+            "$p" \
+            >> "$LOG_FILE" 2>&1
+        then
+
+            success "${DEP_LABEL[$p]} instalado."
+
+            grep -Fxq \
+                "$p" \
+                "$STATE_ROOT/installed_packages" ||
+                echo "$p" >> "$STATE_ROOT/installed_packages"
+
+        else
+
+            error_msg \
+                "No se pudo instalar ${DEP_LABEL[$p]}."
+
+        fi
+
+    done
+
+    install_dependency_configs
+
+    tui_msg \
+        "Instalación terminada.\n\nLas configuraciones base fueron colocadas en:\n\n$TARGET_HOME/.config/bspwm/\n$TARGET_HOME/.config/sxhkd/\n$TARGET_HOME/.config/polybar/\n$TARGET_HOME/.xinitrc"
+}
+
+dependencies_menu() {
+
+    while true; do
+
+        draw_header
+
+        local choices=()
+        local p
+        local status
+        local result
+
+        for p in "${DEP_LIST[@]}"; do
+
+            status="OFF"
+
+            if pkg_installed "$p"; then
+                status="ON"
+            fi
+
+            choices+=(
+                "$p"
+                "${DEP_LABEL[$p]}"
+                "$status"
+            )
+
+        done
+
+        result="$(
+            whiptail \
+                --title "Instalar dependencias" \
+                --checklist \
+                "Selecciona las dependencias que deseas instalar." \
+                24 \
+                82 \
+                12 \
+                "${choices[@]}" \
+                3>&1 \
+                1>&2 \
+                2>&3
+        )" || return
+
+        result="${result//\"/}"
+
+        # shellcheck disable=SC2086
+        install_dependencies $result
+
+        if ! tui_yesno \
+            "¿Quieres volver al menú de dependencias?"
+        then
+
+            return
+
+        fi
+
+    done
+}
+
+theme_paths() {
+
+    case "$1" in
+
+        vt330)
+
+            THEME_ID="vt330"
+            THEME_NAME="DEC VT330 Basic"
+
+            BSPWM_THEME="$REPO_DIR/bspwm/theme_DEV_VT330_basic"
+
+            POLYBAR_THEME="$REPO_DIR/polybar/theme_DEV_VT330_basic_polybar"
+
+            STARTUP_THEME="$REPO_DIR/system_startup/theme_DEC_VT330_basic_startup"
+
+            SYSTEM_THEME="$REPO_DIR/system/theme_DEC_VT330_basic"
+
+            ;;
+
+        gridcase)
+
+            THEME_ID="gridcase"
+            THEME_NAME="GRIDcase 1520 Basic"
+
+            BSPWM_THEME="$REPO_DIR/bspwm/theme_GRIDcase_1520_basic"
+
+            POLYBAR_THEME="$REPO_DIR/polybar/theme_GRIDcase_1520_basic_polybar"
+
+            STARTUP_THEME="$REPO_DIR/system_startup/theme_GRIDcase_1520__basic_startup"
+
+            SYSTEM_THEME="$REPO_DIR/system/theme_GRIDcase_1520_basic"
+
+            ;;
+
+        *)
+
+            return 1
+
+            ;;
+
+    esac
+}
+
+update_repository() {
+
+    printf '\n%b══════════════════════════════════════════════════════%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b Actualizando Themes-Retro desde GitHub%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b══════════════════════════════════════════════════════%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    if [[ -d "$REPO_DIR/.git" ]]; then
+
+        run_visible \
+            git \
+            -C "$REPO_DIR" \
+            fetch \
+            origin \
+            main || return 1
+
+        run_visible \
+            git \
+            -C "$REPO_DIR" \
+            reset \
+            --hard \
+            origin/main || return 1
+
+    else
+
+        if [[ -d "$REPO_DIR" ]]; then
+            run_visible rm -rf "$REPO_DIR" || return 1
+        fi
+
+        run_visible \
+            git \
+            clone \
+            --depth=1 \
+            "$REPO_URL" \
+            "$REPO_DIR" || return 1
+    fi
+
+    success "Repositorio actualizado."
+
+    return 0
+}
+
+theme_dependencies_ready() {
+
+    local missing=()
+    local p
+    local text=""
+
+    for p in "${DEP_LIST[@]}"; do
+
+        if ! pkg_installed "$p"; then
+
+            missing+=("$p")
+
+        fi
+
+    done
+
+    if ((${#missing[@]} == 0)); then
+
+        return 0
+
+    fi
+
+    for p in "${missing[@]}"; do
+
+        text+="• ${DEP_LABEL[$p]}\n"
+
+    done
+
+    if tui_yesno \
+        "El tema necesita estas dependencias:\n\n$text\n\nNo están instaladas.\n\n¿Quieres instalarlas?"
+    then
+
+        install_dependencies \
+            "${missing[@]}"
+
+    else
+
+        if ! tui_yesno \
+            "Las dependencias siguen faltando.\n\n¿Quieres instalar el tema de todas formas?"
+        then
+
+            return 1
+
+        fi
+
+    fi
+
+    return 0
+}
+
+install_theme_bspwm() {
+
+    local destination="$TARGET_HOME/.config/bspwm"
+
+    if [[ ! -d "$BSPWM_THEME" ]]; then
+
+        error_msg \
+            "No existe la carpeta bspwm del tema."
+
+        return 1
+    fi
+
+    mkdir -p "$destination"
+
+    info "Instalando configuración bspwm..."
+
+    copy_directory_contents \
+        "$BSPWM_THEME" \
+        "$destination"
+
+    if [[ -f "$destination/bspwm" &&
+          ! -f "$destination/bspwmrc" ]]
+    then
+
+        mv \
+            "$destination/bspwm" \
+            "$destination/bspwmrc"
+
+    fi
+
+    if [[ -f "$destination/bspwmrc" ]]; then
+
+        chmod 755 \
+            "$destination/bspwmrc"
+
+        sed -i \
+            "s#/home/[^/]*/.config/polybar/config.ini#$TARGET_HOME/.config/polybar/config.ini#g" \
+            "$destination/bspwmrc"
+
+        chown \
+            "$TARGET_USER:$TARGET_USER" \
+            "$destination/bspwmrc"
+
+        success \
+            "bspwmrc del tema instalado."
+
+    fi
+}
+
+install_theme_polybar() {
+
+    local destination="$TARGET_HOME/.config/polybar"
+
+    if [[ ! -d "$POLYBAR_THEME" ]]; then
+
+        error_msg \
+            "No existe la carpeta Polybar del tema."
+
+        return 1
+    fi
+
+    mkdir -p "$destination"
+
+    info "Instalando configuración Polybar..."
+
+    copy_directory_contents \
+        "$POLYBAR_THEME" \
+        "$destination"
+
+    if [[ -f "$destination/config.ini" ]]; then
+
+        chmod 644 \
+            "$destination/config.ini"
+
+        chown \
+            "$TARGET_USER:$TARGET_USER" \
+            "$destination/config.ini"
+
+        success \
+            "config.ini del tema instalado."
+
+    fi
+
+    create_polybar_launcher
+}
+
+create_polybar_launcher() {
+
+    local launcher="$TARGET_HOME/.config/polybar/launch.sh"
+
+    if [[ -e "$launcher" ]]; then
+
+        backup_file "$launcher"
+
+        record_modified "$launcher"
+
+    else
+
+        record_created "$launcher"
+
+    fi
+
+    cat > "$launcher" <<'EOF'
 #!/usr/bin/env sh
 
 CONFIG="$HOME/.config/polybar/config.ini"
+
+if ! command -v polybar >/dev/null 2>&1; then
+    exit 0
+fi
+
+if [ ! -f "$CONFIG" ]; then
+    exit 0
+fi
 
 NETWORK_INTERFACE="$(
     ip route 2>/dev/null |
@@ -777,161 +1235,336 @@ pkill -x polybar 2>/dev/null || true
 
 sleep 0.2
 
-command -v polybar >/dev/null 2>&1 || exit 0
-
-[ -f "$CONFIG" ] || exit 0
-
 polybar \
     --config="$CONFIG" \
     main &
 EOF
 
-    chmod 755 "$launch"
+    chmod 755 "$launcher"
+
+    chown \
+        "$TARGET_USER:$TARGET_USER" \
+        "$launcher"
 }
 
-install_theme_files() {
+install_theme_startup() {
+
+    local source="$STARTUP_THEME"
+    local destination="/usr/share/plymouth/themes"
+    local plymouth_theme_dir=""
+    local plymouth_file=""
+
+    printf '\n%b══════════════════════════════════════════════════════%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b Instalación del tema de arranque Plymouth%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    printf '%b══════════════════════════════════════════════════════%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    if [[ ! -d "$source" ]]; then
+
+        error_msg \
+            "No existe el tema Plymouth:"
+
+        echo
+        echo "$source"
+
+        return 1
+    fi
+
+    mkdir -p "$destination"
+
+    printf '%b[PROC]%b Buscando carpeta Plymouth...\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    plymouth_theme_dir="$(
+        find "$source" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -print \
+            -quit
+    )"
+
+    if [[ -z "$plymouth_theme_dir" ]]; then
+
+        error_msg \
+            "No se encontró ninguna carpeta dentro de system_startup."
+
+        return 1
+    fi
+
+    local theme_folder_name
+
+    theme_folder_name="$(
+        basename "$plymouth_theme_dir"
+    )"
+
+    local final_destination
+
+    final_destination="$destination/$theme_folder_name"
+
+    echo
+    echo "Origen:"
+    echo "  $plymouth_theme_dir"
+    echo
+    echo "Destino:"
+    echo "  $final_destination"
+    echo
+
+    if [[ -e "$final_destination" ]]; then
+
+        warning \
+            "Ya existe una instalación anterior."
+
+        if ! tui_yesno \
+            "El tema Plymouth ya existe en:\n\n$final_destination\n\n¿Quieres reemplazarlo?"
+        then
+
+            return 1
+        fi
+
+        backup_file "$final_destination"
+
+        run_visible \
+            rm \
+            -rf \
+            "$final_destination" || return 1
+    fi
+
+    printf '\n%b[PROC]%b Copiando archivos Plymouth...\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    run_visible \
+        cp \
+        -a \
+        "$plymouth_theme_dir" \
+        "$destination/" || return 1
+
+    chown \
+        -R \
+        root:root \
+        "$final_destination"
+
+    chmod \
+        -R \
+        a+rX \
+        "$final_destination"
+
+    printf '\n%b[ OK ]%b Tema copiado correctamente.\n' \
+        "$C_GREEN" \
+        "$C_RESET"
+
+    plymouth_file="$(
+        find "$final_destination" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.plymouth' \
+            -print \
+            -quit
+    )"
+
+    if [[ -z "$plymouth_file" ]]; then
+
+        error_msg \
+            "No se encontró ningún archivo .plymouth."
+
+        return 1
+    fi
+
+    printf '\n%b[PROC]%b Archivo Plymouth detectado:%b\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$C_WHITE"
+
+    echo "  $plymouth_file"
+
+    printf '\n%b[PROC]%b Registrando Plymouth mediante update-alternatives...%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$C_WHITE"
+
+    run_visible \
+        update-alternatives \
+        --install \
+        /usr/share/plymouth/themes/default.plymouth \
+        default.plymouth \
+        "$plymouth_file" \
+        100 || return 1
+
+    printf '\n%b[PROC]%b Seleccionando el tema Plymouth...%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$C_WHITE"
+
+    run_visible \
+        update-alternatives \
+        --set \
+        default.plymouth \
+        "$plymouth_file" || return 1
+
+    printf '\n%b[PROC]%b Actualizando initramfs...%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$C_WHITE"
+
+    run_visible \
+        update-initramfs \
+        -u || return 1
+
+    printf '\n%b[PROC]%b Actualizando GRUB...%b\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET" \
+        "$C_WHITE"
+
+    run_visible \
+        update-grub || return 1
+
+    echo
+    printf '%b══════════════════════════════════════════════════════%b\n' \
+        "$C_GREEN" \
+        "$C_RESET"
+
+    printf '%b[ OK ] Plymouth instalado y configurado.%b\n' \
+        "$C_GREEN" \
+        "$C_RESET"
+
+    printf '%b══════════════════════════════════════════════════════%b\n' \
+        "$C_GREEN" \
+        "$C_RESET"
+
+    echo
+    echo "Tema:"
+    echo "  $theme_folder_name"
+    echo
+    echo "Archivo:"
+    echo "  $plymouth_file"
+    echo
+}
+
+install_theme_xresources() {
+
+    local source=""
+
+    if [[ -d "$SYSTEM_THEME" ]]; then
+
+        source="$(
+            find \
+                "$SYSTEM_THEME" \
+                -type f \
+                -name '.Xresources' \
+                -print \
+                -quit \
+                2>/dev/null ||
+                true
+        )"
+
+    fi
+
+    if [[ -z "$source" ]]; then
+
+        warning \
+            "No se encontró .Xresources para $THEME_NAME."
+
+        return 0
+    fi
+
+    info "Instalando .Xresources..."
+
+    copy_file_safe \
+        "$source" \
+        "$TARGET_HOME/.Xresources" \
+        0644
+
+    chown \
+        "$TARGET_USER:$TARGET_USER" \
+        "$TARGET_HOME/.Xresources"
+
+    success \
+        "$TARGET_HOME/.Xresources instalado."
+}
+
+install_theme() {
 
     local id="$1"
 
     theme_paths "$id" ||
         return 1
 
-    clone_or_update_repo ||
-        return 1
+    if ! theme_dependencies_ready; then
 
-    if [[ ! -f "$BSP_DIR/bspwm" ]]; then
-
-        err \
-            "No se encontró la configuración bspwm del tema."
-
-        return 1
+        return
 
     fi
 
-    if [[ ! -f "$POLY_DIR/config.ini" ]]; then
+    if ! tui_yesno \
+        "Tema seleccionado:\n\n$THEME_NAME\n\nSe instalarán sus configuraciones de:\n\n• bspwm\n• polybar\n• Plymouth/startup\n• .Xresources\n\n¿Continuar?"
+    then
 
-        err \
-            "No se encontró config.ini del tema."
-
-        return 1
+        return
 
     fi
 
-    msg "Instalando $THEME_NAME..."
+    update_repository ||
+        return
 
-    install_bspwm_theme
+    theme_paths "$id"
 
-    install_sxhkd_theme
+    if [[ ! -d "$BSPWM_THEME" ]]; then
 
-    install_polybar_theme
+        tui_msg \
+            "No se encontró:\n\n$BSPWM_THEME"
 
-    install_xresources \
-        "$BSP_DIR/.Xresources"
+        return
+    fi
+
+    install_theme_bspwm
+
+    install_theme_polybar
+
+    install_theme_startup || return 1
+
+    install_theme_xresources
 
     install_xinitrc
 
-    chown \
-        -R \
-        "$TARGET_USER:$TARGET_USER" \
-        "$TARGET_HOME/.config" \
-        2>/dev/null ||
-        true
+    echo "$THEME_NAME" \
+        > "$STATE_ROOT/current_theme"
+
+    echo "$THEME_ID" \
+        > "$STATE_ROOT/theme_id"
+
+    grep -Fxq \
+        "$THEME_ID" \
+        "$STATE_ROOT/installed_themes" ||
+        echo "$THEME_ID" \
+            >> "$STATE_ROOT/installed_themes"
 
     chown \
         "$TARGET_USER:$TARGET_USER" \
         "$TARGET_HOME/.xinitrc" \
         "$TARGET_HOME/.Xresources" \
-        2>/dev/null ||
-        true
+        2>/dev/null || true
 
-    echo "$id" \
-        > "$STATE_ROOT/current_theme"
-
-    grep -Fxq \
-        "$id" \
-        "$STATE_ROOT/installed_themes" ||
-        echo "$id" \
-            >> "$STATE_ROOT/installed_themes"
-
-    ok "$THEME_NAME instalado."
-
-    tui_msgbox \
-        "$THEME_NAME instalado.\n\nSe crearon/configuraron:\n\n~/.config/bspwm/\n~/.config/sxhkd/\n~/.config/polybar/\n~/.xinitrc\n~/.Xresources"
+    tui_msg \
+        "Tema instalado correctamente.\n\n$THEME_NAME\n\nArchivos instalados:\n\n~/.config/bspwm/\n~/.config/sxhkd/\n~/.config/polybar/\n~/.xinitrc\n~/.Xresources\n\n/usr/share/plymouth/themes/$THEME_ID/"
 
     if tui_yesno \
-        "¿Quieres reiniciar ahora?"
+        "La instalación terminó.\n\n¿Quieres reiniciar ahora?"
     then
 
-        clear
+        clear_screen
 
         reboot
 
     fi
-}
-
-theme_install_flow() {
-
-    local id="$1"
-
-    local missing=()
-    local p
-    local text=""
-
-    while IFS= read -r p; do
-
-        [[ -n "$p" ]] &&
-            missing+=( "$p" )
-
-    done < <(missing_theme_dependencies)
-
-    if ((${#missing[@]} > 0)); then
-
-        text="Faltan dependencias:\n\n"
-
-        for p in "${missing[@]}"; do
-
-            text+="• ${DEP_LABEL[$p]}\n"
-
-        done
-
-        text+="\nEl tema puede no funcionar correctamente.\n¿Quieres instalar las faltantes ahora?"
-
-        if tui_yesno "$text"; then
-
-            install_selected_dependencies \
-                "${missing[@]}"
-
-        else
-
-            tui_yesno \
-                "No se instalarán dependencias.\n\n¿Quieres instalar el tema de todas formas?" ||
-                return
-
-        fi
-
-        if ! all_theme_dependencies_present; then
-
-            tui_yesno \
-                "Aún faltan dependencias.\n\n¿Quieres instalar el tema de todas formas?" ||
-                return
-
-        fi
-    fi
-
-    theme_paths "$id" ||
-        return
-
-    if ! tui_yesno \
-        "Tema seleccionado:\n\n$THEME_NAME\n\n¿Continuar?"
-    then
-
-        return
-
-    fi
-
-    install_theme_files "$id"
-
-    pause_screen
 }
 
 theme_menu() {
@@ -946,9 +1579,9 @@ theme_menu() {
             whiptail \
                 --title "Instalar temas" \
                 --menu \
-                "Selecciona un tema" \
+                "Selecciona el tema que quieres instalar." \
                 16 \
-                76 \
+                78 \
                 4 \
                 "1" "DEC VT330 Basic" \
                 "2" "GRIDcase 1520 Basic" \
@@ -961,11 +1594,11 @@ theme_menu() {
         case "$choice" in
 
             1)
-                theme_install_flow vt330
+                install_theme vt330
                 ;;
 
             2)
-                theme_install_flow gridcase
+                install_theme gridcase
                 ;;
 
             3)
@@ -977,26 +1610,28 @@ theme_menu() {
     done
 }
 
-version_menu() {
+versions_menu() {
 
     while true; do
 
         draw_header
 
         local choice
+        local commit="No disponible"
 
         choice="$(
             whiptail \
                 --title "Versiones" \
                 --menu \
-                "Selecciona una opción" \
+                "Información de Themes Retro." \
                 18 \
-                76 \
-                4 \
+                78 \
+                5 \
                 "1" "Temas disponibles" \
                 "2" "Versión del instalador" \
-                "3" "Revisar versión desde Git" \
-                "4" "Volver" \
+                "3" "Versión actual de Git" \
+                "4" "Actualizar información desde Git" \
+                "5" "Volver" \
                 3>&1 \
                 1>&2 \
                 2>&3
@@ -1006,43 +1641,64 @@ version_menu() {
 
             1)
 
-                tui_msgbox \
-                    "Temas disponibles:\n\nDEC VT330 Basic\nGRIDcase 1520 Basic\n\nTema instalado:\n$(current_theme)"
+                tui_msg \
+                    "TEMAS DISPONIBLES\n\nDEC VT330 Basic\nGRIDcase 1520 Basic"
 
                 ;;
 
             2)
 
-                tui_msgbox \
-                    "Themes Retro\n\nInstaller: $APP_VERSION\n\nRepositorio:\n$REPO_URL"
+                tui_msg \
+                    "Themes Retro\n\nInstaller version:\n$APP_VERSION"
 
                 ;;
 
             3)
 
-                clone_or_update_repo ||
-                    true
+                if [[ -d "$REPO_DIR/.git" ]]; then
 
-                local repo="$INSTALL_ROOT/repository"
+                    commit="$(
+                        git \
+                            -C "$REPO_DIR" \
+                            rev-parse \
+                            --short \
+                            HEAD \
+                            2>/dev/null ||
+                            echo "No disponible"
+                    )"
 
-                local commit
+                fi
 
-                commit="$(
-                    git \
-                        -C "$repo" \
-                        rev-parse \
-                        --short \
-                        HEAD \
-                        2>/dev/null ||
-                        echo desconocido
-                )"
-
-                tui_msgbox \
-                    "Rama: main\nCommit: $commit"
+                tui_msg \
+                    "Commit actual:\n\n$commit"
 
                 ;;
 
             4)
+
+                update_repository ||
+                    true
+
+                if [[ -d "$REPO_DIR/.git" ]]; then
+
+                    commit="$(
+                        git \
+                            -C "$REPO_DIR" \
+                            rev-parse \
+                            --short \
+                            HEAD \
+                            2>/dev/null ||
+                            echo "No disponible"
+                    )"
+
+                fi
+
+                tui_msg \
+                    "Repositorio actualizado.\n\nCommit:\n$commit"
+
+                ;;
+
+            5)
 
                 return
 
@@ -1053,33 +1709,20 @@ version_menu() {
     done
 }
 
-restart_menu() {
-
-    if ! tui_yesno \
-        "¿Estás seguro de que quieres reiniciar el sistema?"
-    then
-
-        return
-
-    fi
-
-    clear
-
-    echo "Reiniciando en 3 segundos..."
-
-    sleep 3
-
-    reboot
-}
-
 restore_backups() {
 
     [[ -f "$STATE_ROOT/backups" ]] ||
         return
 
+    local original
+    local backup
+
     while IFS='|' read -r original backup; do
 
-        [[ -n "$original" && -e "$backup" ]] ||
+        [[ -n "$original" ]] ||
+            continue
+
+        [[ -e "$backup" ]] ||
             continue
 
         rm -rf "$original"
@@ -1101,7 +1744,96 @@ restore_backups() {
     done < "$STATE_ROOT/backups"
 }
 
-remove_theme_config() {
+remove_plymouth_theme() {
+
+    local theme_id=""
+
+    if [[ -f "$STATE_ROOT/theme_id" ]]; then
+        theme_id="$(cat "$STATE_ROOT/theme_id")"
+    fi
+
+    if [[ -z "$theme_id" ]]; then
+        warning "No hay un tema Plymouth registrado."
+        return 0
+    fi
+
+    local plymouth_path=""
+
+    case "$theme_id" in
+
+        vt330|gridcase)
+
+            plymouth_path="$(
+                find \
+                    /usr/share/plymouth/themes \
+                    -mindepth 2 \
+                    -maxdepth 2 \
+                    -type f \
+                    -name '*.plymouth' \
+                    -print \
+                    2>/dev/null |
+                while read -r file; do
+
+                    if grep -q \
+                        "ModuleName" \
+                        "$file" 2>/dev/null
+                    then
+                        echo "$file"
+                        break
+                    fi
+
+                done
+            )"
+
+            ;;
+
+    esac
+
+    if [[ -n "$plymouth_path" ]]; then
+
+        printf '\n%b[PROC]%b Eliminando Plymouth de update-alternatives...\n\n' \
+            "$C_ORANGE" \
+            "$C_RESET"
+
+        run_visible \
+            update-alternatives \
+            --remove \
+            default.plymouth \
+            "$plymouth_path" || true
+
+    fi
+
+    # El nombre real de la carpeta del repositorio actualmente es
+    # amber-system-startup.
+    if [[ -d "/usr/share/plymouth/themes/amber-system-startup" ]]; then
+
+        printf '\n%b[PROC]%b Eliminando archivos del tema Plymouth...\n\n' \
+            "$C_ORANGE" \
+            "$C_RESET"
+
+        run_visible \
+            rm \
+            -rf \
+            "/usr/share/plymouth/themes/amber-system-startup"
+    fi
+
+    printf '\n%b[PROC]%b Actualizando initramfs después de la eliminación...\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    run_visible \
+        update-initramfs \
+        -u || true
+
+    printf '\n%b[PROC]%b Actualizando GRUB después de la eliminación...\n\n' \
+        "$C_ORANGE" \
+        "$C_RESET"
+
+    run_visible \
+        update-grub || true
+}
+
+remove_theme_configuration() {
 
     local path
 
@@ -1109,8 +1841,10 @@ remove_theme_config() {
 
         while IFS= read -r path; do
 
-            [[ -n "$path" ]] &&
-                rm -rf "$path"
+            [[ -n "$path" ]] || \
+                continue
+
+            rm -rf "$path"
 
         done < "$STATE_ROOT/created_files"
 
@@ -1124,46 +1858,48 @@ remove_theme_config() {
         "$TARGET_HOME/.config/polybar"
 
     rm -f \
-        "$STATE_ROOT/current_theme"
+        "$TARGET_HOME/.xinitrc"
+
+    remove_plymouth_theme
+
+    rm -f \
+        "$STATE_ROOT/current_theme" \
+        "$STATE_ROOT/theme_id"
 
     : > "$STATE_ROOT/backups"
-
     : > "$STATE_ROOT/created_files"
-
     : > "$STATE_ROOT/modified_files"
-
     : > "$STATE_ROOT/installed_themes"
 }
 
-uninstall_theme_config() {
+uninstall_theme_only() {
 
     if ! tui_yesno \
-        "Esto elimina la configuración de Themes Retro y restaura backups cuando existan.\n\n¿Continuar?"
+        "Se eliminará la configuración de Themes Retro y se restaurarán los backups disponibles.\n\n¿Continuar?"
     then
 
         return
 
     fi
 
-    remove_theme_config
+    remove_theme_configuration
 
-    tui_msgbox \
-        "Configuración del tema eliminada/restaurada."
+    tui_msg \
+        "Configuración de los temas eliminada."
 }
 
-uninstall_dependencies() {
+uninstall_dependencies_only() {
 
-    local removable=()
+    local packages=()
     local p
     local text=""
 
-    if [[ ! -f "$STATE_ROOT/installed_packages" ]]; then
+    if [[ ! -s "$STATE_ROOT/installed_packages" ]]; then
 
-        tui_msgbox \
-            "No hay dependencias registradas para desinstalar."
+        tui_msg \
+            "No hay dependencias registradas como instaladas por Themes Retro."
 
         return
-
     fi
 
     while IFS= read -r p; do
@@ -1172,45 +1908,43 @@ uninstall_dependencies() {
            pkg_installed "$p"
         then
 
-            removable+=( "$p" )
+            packages+=("$p")
 
         fi
 
     done < "$STATE_ROOT/installed_packages"
 
-    if ((${#removable[@]} == 0)); then
+    if ((${#packages[@]} == 0)); then
 
-        tui_msgbox \
-            "No hay dependencias instaladas por Themes Retro para eliminar."
+        tui_msg \
+            "No hay dependencias que desinstalar."
 
         return
     fi
 
-    text="Se eliminarán únicamente los paquetes instalados por este instalador:\n\n"
-
-    for p in "${removable[@]}"; do
+    for p in "${packages[@]}"; do
 
         text+="• ${DEP_LABEL[$p]:-$p}\n"
 
     done
 
     if ! tui_yesno \
-        "$text\n¿Continuar?"
+        "Se eliminarán únicamente los paquetes que Themes Retro registró como instalados.\n\n$text\n¿Continuar?"
     then
 
         return
 
     fi
 
-    for p in "${removable[@]}"; do
+    for p in "${packages[@]}"; do
 
-        msg "Eliminando $p..."
+        info "Eliminando ${DEP_LABEL[$p]:-$p}..."
 
         apt-get remove \
             -y \
             "$p" \
             >> "$LOG_FILE" 2>&1 ||
-            warn "No se pudo eliminar $p."
+            warning "No se pudo eliminar $p."
 
     done
 
@@ -1221,31 +1955,30 @@ uninstall_dependencies() {
 
     : > "$STATE_ROOT/installed_packages"
 
-    tui_msgbox \
-        "Dependencias eliminadas.\n\nLos paquetes que ya existían antes del instalador no se eliminan."
+    tui_msg \
+        "Dependencias eliminadas."
 }
 
-uninstall_all() {
+uninstall_everything() {
 
     if ! tui_yesno \
-        "ATENCIÓN\n\nSe eliminarán:\n\n• Configuración de los temas\n• Dependencias instaladas por Themes Retro\n• Datos del instalador\n\n¿Continuar?"
+        "ATENCIÓN\n\nEsto eliminará la configuración, los temas y las dependencias instaladas por Themes Retro.\n\n¿Estás completamente seguro?"
     then
 
         return
 
     fi
 
-    remove_theme_config
+    remove_theme_configuration
 
-    uninstall_dependencies
+    uninstall_dependencies_only
 
     rm -rf \
         "$INSTALL_ROOT" \
-        "$STATE_ROOT" \
-        "$BACKUP_ROOT"
+        "$STATE_ROOT"
 
-    tui_msgbox \
-        "Themes Retro fue eliminado completamente."
+    tui_msg \
+        "Themes Retro ha sido eliminado completamente."
 }
 
 uninstall_menu() {
@@ -1260,9 +1993,9 @@ uninstall_menu() {
             whiptail \
                 --title "Desinstalar" \
                 --menu \
-                "Selecciona qué eliminar" \
+                "Selecciona qué deseas eliminar." \
                 18 \
-                78 \
+                82 \
                 5 \
                 "1" "Solo configuración de los temas" \
                 "2" "Solo dependencias" \
@@ -1276,15 +2009,15 @@ uninstall_menu() {
         case "$choice" in
 
             1)
-                uninstall_theme_config
+                uninstall_theme_only
                 ;;
 
             2)
-                uninstall_dependencies
+                uninstall_dependencies_only
                 ;;
 
             3)
-                uninstall_all
+                uninstall_everything
                 return
                 ;;
 
@@ -1295,6 +2028,27 @@ uninstall_menu() {
         esac
 
     done
+}
+
+restart_menu() {
+
+    if ! tui_yesno \
+        "¿Estás seguro de que quieres reiniciar el sistema?"
+    then
+
+        return
+
+    fi
+
+    clear_screen
+
+    echo
+    echo "Reiniciando en 3 segundos..."
+    echo
+
+    sleep 3
+
+    reboot
 }
 
 main_menu() {
@@ -1309,9 +2063,9 @@ main_menu() {
             whiptail \
                 --title "Menú principal" \
                 --menu \
-                "Selecciona una opción" \
+                "Selecciona una opción." \
                 18 \
-                78 \
+                82 \
                 6 \
                 "1" "Instalar dependencias" \
                 "2" "Instalar temas" \
@@ -1335,7 +2089,7 @@ main_menu() {
                 ;;
 
             3)
-                version_menu
+                versions_menu
                 ;;
 
             4)
@@ -1347,7 +2101,7 @@ main_menu() {
                 ;;
 
             6)
-                clear
+                clear_screen
                 exit 0
                 ;;
 
@@ -1360,41 +2114,17 @@ main() {
 
     require_root "$@"
 
-    if [[ ! -f /etc/os-release ]]; then
-
-        err "No se pudo detectar el sistema."
-
-        exit 1
-
-    fi
-
-    . /etc/os-release
-
-    if [[ "${ID:-}" != "ubuntu" ||
-          "${VERSION_ID:-}" != "22.04" ]]
-    then
-
-        err \
-            "Este instalador está diseñado para Ubuntu Server 22.04."
-
-        echo
-
-        echo "Detectado:"
-        echo "${PRETTY_NAME:-desconocido}"
-
-        exit 1
-    fi
+    check_ubuntu
 
     detect_user
 
-    prepare_state
+    prepare_directories
 
-    ensure_apt_updated ||
-        true
+    ensure_whiptail || {
 
-    ensure_whiptail ||
-    {
-        err "No se pudo instalar whiptail."
+        error_msg \
+            "No se pudo instalar whiptail."
+
         exit 1
     }
 
